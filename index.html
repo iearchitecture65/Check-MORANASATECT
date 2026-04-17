@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ThesisCheck - ระบบตรวจสอบข้อมูลวิทยานิพนธ์</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Prompt:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'Prompt', 'sans-serif'] },
+                    animation: {
+                        'fade-in-up': 'fadeInUp 0.4s ease-out forwards',
+                        'bounce-slow': 'bounce 2s infinite',
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    },
+                    keyframes: {
+                        fadeInUp: {
+                            '0%': { opacity: '0', transform: 'translateY(15px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body { 
+            font-family: 'Prompt', sans-serif; 
+            overflow: hidden; 
+            height: 100vh; 
+            height: 100dvh; 
+            background-color: #f8fafc; 
+            margin: 0; 
+            padding: 0; 
+        }
+        #app { 
+            height: 100vh; 
+            height: 100dvh; 
+            display: flex; 
+            flex-direction: column; 
+            position: relative; 
+            background-color: #f8fafc;
+        }
+        .scrollable-content {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: calc(100px + env(safe-area-inset-bottom)); 
+            scroll-behavior: smooth;
+        }
+        .safe-pt { padding-top: env(safe-area-inset-top); }
+        .safe-pb { padding-bottom: env(safe-area-inset-bottom); }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+
+        .page-transition { animation: fadeInUp 0.3s ease-out forwards; }
+        
+        /* Glass effect for sticky action button */
+        .glass-bottom {
+            background: linear-gradient(to top, rgba(248,250,252,1) 60%, rgba(248,250,252,0) 100%);
+        }
+    </style>
+</head>
+<body class="text-slate-900">
+
+    <div id="app">
+        <div class="flex flex-col items-center justify-center h-full text-indigo-600 gap-4">
+            <div class="animate-spin rounded-full h-12 w-12 border-t-4 border-indigo-600 border-opacity-30"></div>
+            <p class="font-bold text-sm tracking-widest uppercase animate-pulse">กำลังโหลดระบบ...</p>
+        </div>
+    </div>
+    
+    <!-- เพิ่มคอนเทนเนอร์สำหรับ Modal เพื่อแยกออกจาก app ไม่ให้เวลากดบันทึกแล้วจอกระตุก -->
+    <div id="modal-container"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, collection, onSnapshot, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+        // ตั้งค่าเชื่อมต่อฐานข้อมูล Firebase ของคุณ (moranasatect)
+        const firebaseConfig = {
+            apiKey: "AIzaSyD1z-AufMcsNqnbm3uUjoniuhdmDksYHMY",
+            authDomain: "moranasatect.firebaseapp.com",
+            projectId: "moranasatect",
+            storageBucket: "moranasatect.firebasestorage.app",
+            messagingSenderId: "592676930184",
+            appId: "1:592676930184:web:a142d92aace735cff5153d",
+            measurementId: "G-WY21FBFBPB"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = 'thesis-check-app'; // ชื่อ Folder หลักในการเก็บข้อมูล
+
+        // Google Sheet CSV Export URL (แปลงจาก pubhtml เป็น output=csv เพื่อให้อ่านข้อมูลง่าย)
+        const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRyI-a9eEarynPfuWWbpTqHvz-vDHBGnE1UnvqvDOGIAA9nWybOkfS2jlI3xJRrpFAuR5nmWup9169/pub?gid=1223023440&single=true&output=csv";
+
+        window.state = {
+            view: 'login', // login, student, admin
+            user: null,
+            studentId: '',
+            isAdmin: false,
+            sheetData: [],
+            currentStudentData: null,
+            settings: {
+                editFormUrl: "" // Admin ตั้งค่าลิงก์ Google Form
+            },
+            confirmations: {}, // { "65030298": { section1: true, section2: true, section3: true } }
+            isLoading: true,
+            modal: { show: false, title: '', message: '', type: 'info' }
+        };
+
+        // --- CSV Parser (Handle quotes and commas inside cells) ---
+        function parseCSV(str) {
+            const arr = [];
+            let quote = false;
+            let row = 0, col = 0;
+            for (let c = 0; c < str.length; c++) {
+                let cc = str[c], nc = str[c+1];
+                arr[row] = arr[row] || [];
+                arr[row][col] = arr[row][col] || '';
+                if (cc == '"' && quote && nc == '"') { arr[row][col] += cc; ++c; continue; }
+                if (cc == '"') { quote = !quote; continue; }
+                if (cc == ',' && !quote) { ++col; continue; }
+                if (cc == '\r' && nc == '\n' && !quote) { ++row; col = 0; ++c; continue; }
+                if (cc == '\n' && !quote) { ++row; col = 0; continue; }
+                if (cc == '\r' && !quote) { ++row; col = 0; continue; }
+                arr[row][col] += cc;
+            }
+            return arr;
+        }
+
+        // --- Data Fetching ---
+        // เพิ่ม parameter isBackgroundPoll เพื่อซ่อน Error ในคอนโซลเวลา Google แบนการรีเฟรชถี่ๆ
+        async function fetchSheetData(isBackgroundPoll = false) {
+            try {
+                const fetchUrl = SHEET_CSV_URL + "&t=" + new Date().getTime();
+                const response = await fetch(fetchUrl);
+                
+                if (!response.ok) throw new Error("HTTP Status " + response.status);
+                const csvText = await response.text();
+                const parsed = parseCSV(csvText);
+                
+                if (parsed.length > 0) {
+                    const headers = parsed[0];
+                    const dataRows = parsed.slice(1);
+                    
+                    // Map headers to row data dynamically based on column titles (1.1, 1.2, etc.)
+                    const newData = dataRows.map(row => {
+                        let obj = {};
+                        headers.forEach((header, index) => {
+                            // Find the key from header (e.g., "1.1 รหัสนักศึกษา" -> extract "1.1")
+                            let keyMatch = header.match(/^(\d+\.\d+)/);
+                            if (keyMatch) {
+                                obj[keyMatch[1]] = row[index] ? row[index].trim() : '-';
+                            }
+                            // Also keep original header just in case
+                            obj[header] = row[index] ? row[index].trim() : '-';
+                        });
+                        return obj;
+                    }).filter(row => row['1.1'] && row['1.1'] !== '-'); // Filter out empty rows
+
+                    // อัปเดตข้อมูลเข้าสู่ State ทันที
+                    window.state.sheetData = newData;
+
+                    // ถ้ากำลังดูหน้านักศึกษาอยู่ ให้อัปเดตข้อมูลของคนนั้นให้เป็นล่าสุดด้วย
+                    if (window.state.view === 'student' && window.state.studentId) {
+                        window.state.currentStudentData = window.state.sheetData.find(row => row['1.1'] === window.state.studentId) || window.state.currentStudentData;
+                    }
+
+                    // สั่งอัปเดตหน้าจอแบบไม่กระตุกทุกๆ 3 วิ (Soft Update)
+                    if (!window.state.isLoading) window.softUpdateUI();
+                }
+            } catch (error) {
+                // ซ่อน Error ใน Console หากเป็นการดึงข้อมูลพื้นหลัง (ป้องกัน Console รกเวลา Google ลิมิตการดึงข้อมูล)
+                if (!isBackgroundPoll) {
+                    console.error("Error fetching sheet:", error);
+                    // Fallback Mock Data if CORS fails in strict environment
+                    window.state.sheetData = [
+                        { "1.1": "65030001", "1.2": "นายใจดี เรียนเก่ง", "1.3": "IG: jaidee_th", "2.1": "การศึกษาผลกระทบของ AI (Study of AI Impacts)", "2.2": "ผศ.ดร.สมชาย ใจมั่น", "2.3": "วิจัยเชิงทดลอง", "3.1": "cover.jpg, sub.jpg", "3.2": "profile.png", "3.3": "Drive Link" },
+                        { "1.1": "65030002", "1.2": "นางสาวสมหญิง สวยงาม", "1.3": "Line: somying_s", "2.1": "การออกแบบ UI สำหรับผู้สูงอายุ (UI Design for Elderly)", "2.2": "อ.มานะ อุตสาหะ", "2.3": "ออกแบบและการสร้าง", "3.1": "cover2.jpg", "3.2": "photo.jpg", "3.3": "Drive Link 2" }
+                    ];
+                    if(window.state.isLoading) {
+                        window.uiAlert("เนื่องจากข้อจำกัดด้านความปลอดภัยของเบราว์เซอร์ กำลังแสดงข้อมูลจำลองเพื่อการทดสอบ", "info");
+                    }
+                }
+            }
+        }
+
+        // --- Firebase Initialization & Listening ---
+        async function init() {
+            try {
+                // Mandatory Rule 3: Auth Before Queries + Fallback for Custom Config
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    try {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } catch (customTokenError) {
+                        console.warn("Custom token mismatch (normal when using custom Firebase config). Falling back to anonymous login.");
+                        await signInAnonymously(auth);
+                    }
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, async (u) => {
+                    window.state.user = u;
+                    if (u) {
+                        await fetchSheetData(false); // First load (not background)
+                        listenToData();
+
+                        // เปลี่ยนจาก setInterval เป็น setTimeout แบบ Recursive 
+                        // เพื่อป้องกันการเรียก Fetch ซ้อนทับกันเวลาอินเทอร์เน็ตช้า
+                        const pollData = async () => {
+                            await fetchSheetData(true); // true = Background Poll (ซ่อน Error)
+                            window.pollingTimer = setTimeout(pollData, 3000);
+                        };
+                        
+                        if (window.pollingTimer) clearTimeout(window.pollingTimer);
+                        window.pollingTimer = setTimeout(pollData, 3000);
+                    }
+                });
+            } catch (err) { 
+                console.error("Firebase Auth Error:", err);
+                window.state.isLoading = false;
+                render();
+            }
+        }
+
+        function listenToData() {
+            if (!window.state.user) return;
+            
+            // Listen to Admin Settings (Google Form Link)
+            onSnapshot(
+                doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), 
+                (s) => {
+                    if (s.exists()) window.state.settings = { ...window.state.settings, ...s.data() };
+                    
+                    if (window.state.isLoading) {
+                        window.state.isLoading = false;
+                        render();
+                    } else {
+                        window.softUpdateUI();
+                    }
+                },
+                (error) => { console.error("Snapshot error:", error); window.state.isLoading = false; render(); }
+            );
+
+            // Listen to Student Confirmations
+            onSnapshot(
+                doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), 
+                (s) => {
+                    if (s.exists()) window.state.confirmations = s.data();
+                    if (!window.state.isLoading) window.softUpdateUI();
+                },
+                (error) => { console.error("Snapshot error:", error); }
+            );
+        }
+
+        // --- Actions ---
+        window.handleLogin = (e) => {
+            e.preventDefault();
+            const input = document.getElementById('login_id').value.trim();
+            
+            if (input === "65030900") {
+                window.state.isAdmin = true;
+                window.state.studentId = "ADMIN";
+                window.state.view = 'admin';
+            } else {
+                // เช็คว่ามีรหัสนักศึกษานี้ใน Sheet หรือไม่
+                const student = window.state.sheetData.find(row => row['1.1'] === input);
+                if (student) {
+                    window.state.isAdmin = false;
+                    window.state.studentId = input;
+                    window.state.currentStudentData = student;
+                    window.state.view = 'student';
+                } else {
+                    return window.uiAlert("ไม่พบข้อมูลรหัสนักศึกษานี้ในระบบ", "error");
+                }
+            }
+            render();
+        };
+
+        window.logout = () => {
+            window.state.view = 'login';
+            window.state.studentId = '';
+            window.state.isAdmin = false;
+            window.state.currentStudentData = null;
+            render();
+        };
+
+        window.toggleConfirmation = async (section) => {
+            if (!window.state.user) return;
+            const sid = window.state.studentId;
+            
+            // Optimistic update
+            let currentData = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
+            let updatedData = { ...currentData, [section]: !currentData[section] };
+            
+            let newConfirmations = { ...window.state.confirmations, [sid]: updatedData };
+            window.state.confirmations = newConfirmations;
+            
+            // อัปเดต UI แบบนุ่มนวลแทนการเรนเดอร์ใหม่ทั้งหมด
+            window.softUpdateUI();
+
+            // Save to Firebase (using setDoc with merge to not overwrite other students)
+            try {
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), newConfirmations, { merge: true });
+            } catch (err) {
+                console.error("Save error:", err);
+                window.uiAlert("เกิดข้อผิดพลาดในการบันทึกข้อมูล", "error");
+            }
+        };
+
+        // --- ฟังก์ชันอัปเดตเฉพาะส่วน (ป้องกันเว็บกระตุก/รีเฟรช) ---
+        window.softUpdateUI = () => {
+            if (window.state.view === 'student' && window.state.currentStudentData) {
+                const data = window.state.currentStudentData;
+                
+                // 1. อัปเดต Text Fields
+                const fields = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '3.1', '3.2', '3.3'];
+                fields.forEach(id => {
+                    const el = document.getElementById(`val-${id.replace('.', '-')}`);
+                    if (el) el.innerHTML = data[id] || '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>';
+                });
+
+                // 2. อัปเดตสถานะปุ่มยืนยัน
+                const sid = window.state.studentId;
+                const myConf = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
+                const isAllConfirmed = myConf.s1 && myConf.s2 && myConf.s3;
+
+                ['s1', 's2', 's3'].forEach(key => {
+                    const btn = document.getElementById(`btn-conf-${key}`);
+                    const card = document.getElementById(`card-${key}`);
+                    const iconBox = document.getElementById(`icon-box-${key}`);
+                    if (btn && card && iconBox) {
+                        const isConf = myConf[key];
+                        card.className = `bg-white p-6 rounded-[2rem] border ${isConf ? 'border-green-400 ring-4 ring-green-50' : 'border-slate-200'} shadow-sm transition-all duration-300`;
+                        iconBox.className = `w-10 h-10 ${isConf ? 'bg-green-100 text-green-600' : 'bg-indigo-50 text-indigo-600'} rounded-xl flex items-center justify-center transition-all`;
+                        btn.className = `w-full py-4 rounded-xl font-bold flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${isConf ? 'bg-green-500 text-white shadow-lg shadow-green-200 border-b-4 border-green-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`;
+                        btn.innerHTML = `<i data-lucide="${isConf ? 'check-square' : 'square'}" size="20"></i><span>${isConf ? 'ยืนยันความถูกต้องแล้ว' : 'คลิกเพื่อยืนยันว่าข้อมูลถูกต้อง'}</span>`;
+                    }
+                });
+
+                // 3. อัปเดตลิงก์ Edit Form
+                const editBtn = document.getElementById('student-edit-btn');
+                if (editBtn) {
+                    editBtn.href = window.state.settings.editFormUrl || '#';
+                    editBtn.onclick = window.state.settings.editFormUrl ? null : (e) => { e.preventDefault(); window.uiAlert('แอดมินยังไม่ได้ตั้งค่าลิงก์แก้ไขข้อมูล', 'error'); };
+                }
+
+                // 4. อัปเดตปุ่มสถานะด้านล่าง
+                const bottomBar = document.getElementById('student-status-btn');
+                if (bottomBar) {
+                    if (isAllConfirmed) {
+                        bottomBar.outerHTML = `<div id="student-status-btn" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-default transition-all"><i data-lucide="check-circle-2" size="18"></i> ยืนยันครบถ้วน</div>`;
+                    } else {
+                        bottomBar.outerHTML = `<div id="student-status-btn" class="flex-1 py-4 bg-slate-200 text-slate-400 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-2 text-[11px] uppercase tracking-widest cursor-not-allowed transition-all">โปรดยืนยันให้ครบ 3 ส่วน</div>`;
+                    }
+                }
+                lucide.createIcons();
+                
+            } else if (window.state.view === 'admin') {
+                const students = window.state.sheetData;
+                let confirmedCount = 0;
+                const studentStatusList = students.map(s => {
+                    const sid = s['1.1'];
+                    const conf = window.state.confirmations[sid] || {};
+                    const isAllConfirmed = conf.s1 && conf.s2 && conf.s3;
+                    if (isAllConfirmed) confirmedCount++;
+                    return { ...s, isAllConfirmed, conf };
+                });
+
+                const totalEl = document.getElementById('admin-total-count');
+                if (totalEl) totalEl.innerHTML = `${students.length} <span class="text-sm font-normal opacity-80">คน</span>`;
+                
+                const confEl = document.getElementById('admin-confirmed-count');
+                if (confEl) confEl.innerHTML = `${confirmedCount} <span class="text-sm font-normal opacity-80">คน</span>`;
+
+                const formUrlInput = document.getElementById('admin-form-url-input');
+                if (formUrlInput && document.activeElement !== formUrlInput) {
+                    formUrlInput.value = window.state.settings.editFormUrl || '';
+                }
+
+                const tbody = document.getElementById('admin-table-body');
+                if (tbody) {
+                    tbody.innerHTML = studentStatusList.map(s => `
+                        <tr class="hover:bg-slate-50/50 transition-colors">
+                            <td class="py-4 pl-2">
+                                <p class="font-black text-slate-800 text-sm">${s['1.1']}</p>
+                                <p class="text-[11px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
+                            </td>
+                            <td class="py-4 text-center">
+                                ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                            </td>
+                            <td class="py-4 text-center">
+                                ${s.conf.s2 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                            </td>
+                            <td class="py-4 text-center">
+                                ${s.conf.s3 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                            </td>
+                            <td class="py-4 text-right pr-2">
+                                ${s.isAllConfirmed 
+                                    ? '<span class="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full uppercase border border-green-200"><i data-lucide="check" size="12"></i> สมบูรณ์</span>' 
+                                    : '<span class="inline-flex items-center gap-1 px-3 py-1 bg-orange-50 text-orange-600 text-[10px] font-bold rounded-full uppercase border border-orange-200"><i data-lucide="clock" size="12"></i> รอดำเนินการ</span>'
+                                }
+                            </td>
+                        </tr>
+                    `).join('');
+                    lucide.createIcons();
+                }
+            }
+        };
+
+        window.saveAdminSettings = async (e) => {
+            e.preventDefault();
+            const url = e.target.formUrl.value.trim();
+            
+            try {
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), { editFormUrl: url }, { merge: true });
+                window.uiAlert("บันทึกลิงก์ Google Form เรียบร้อยแล้ว", "success");
+            } catch (err) {
+                window.uiAlert("เกิดข้อผิดพลาดในการบันทึก", "error");
+            }
+        };
+
+        window.uiAlert = (message, type = 'info') => {
+            window.state.modal = { show: true, title: type === 'error' ? 'ข้อผิดพลาด' : type === 'success' ? 'สำเร็จ' : 'แจ้งเตือน', message, type };
+            window.updateModalUI();
+        };
+        window.closeModal = () => { 
+            window.state.modal.show = false; 
+            window.updateModalUI(); 
+        };
+
+        window.updateModalUI = () => {
+            const container = document.getElementById('modal-container');
+            if (container) {
+                container.innerHTML = renderUIModal();
+                lucide.createIcons();
+            }
+        };
+
+        // --- Render Functions ---
+        function renderHeader(title, subtitle) {
+            return `
+                <header class="bg-white border-b border-slate-100 flex-none px-6 z-50 shadow-sm flex items-center justify-between safe-pt min-h-[4.5rem]">
+                    <div class="max-w-2xl mx-auto w-full flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200 relative">
+                                <i data-lucide="file-check-2" size="20"></i>
+                                <!-- จุดสีเขียวแสดงสถานะ Auto-Update ทุก 3 วิ -->
+                                <span class="absolute -top-1 -right-1 w-3 h-3 bg-green-400 border-2 border-white rounded-full animate-ping"></span>
+                                <span class="absolute -top-1 -right-1 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></span>
+                            </div>
+                            <div class="text-left leading-none">
+                                <h1 class="font-black text-sm text-slate-800 uppercase tracking-tight">${title}</h1>
+                                <p class="text-[9px] font-bold text-indigo-600 uppercase tracking-widest mt-1 flex items-center gap-1">
+                                    ${subtitle}
+                                    <span class="text-[8px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">Auto-Update</span>
+                                </p>
+                            </div>
+                        </div>
+                        <button onclick="window.logout()" class="p-3 bg-slate-50 text-slate-400 hover:text-red-500 rounded-xl border border-slate-100 active:scale-90 transition-all flex items-center gap-2">
+                            <span class="hidden sm:inline text-xs font-bold uppercase">ออกจากระบบ</span>
+                            <i data-lucide="log-out" size="18"></i>
+                        </button>
+                    </div>
+                </header>
+            `;
+        }
+
+        function renderLogin() {
+            return `
+                <div class="h-[100dvh] w-full flex flex-col items-center justify-center p-6 bg-slate-50 relative overflow-hidden">
+                    <!-- Background blobs -->
+                    <div class="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow"></div>
+                    <div class="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-blue-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow" style="animation-delay: 1s;"></div>
+                    
+                    <div class="max-w-sm w-full bg-white rounded-[2.5rem] p-10 shadow-2xl border border-white text-center page-transition relative z-10">
+                        <div class="w-20 h-20 bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-[1.5rem] flex items-center justify-center text-white mx-auto mb-8 shadow-xl shadow-indigo-200">
+                            <i data-lucide="shield-check" size="40"></i>
+                        </div>
+                        <h1 class="text-3xl font-black text-slate-800 mb-2 tracking-tight">ThesisCheck</h1>
+                        <p class="text-slate-400 text-[10px] font-bold uppercase mt-2 tracking-widest opacity-80">ระบบตรวจสอบข้อมูลวิทยานิพนธ์</p>
+                        
+                        <form onsubmit="window.handleLogin(event)" class="mt-10 space-y-5">
+                            <div class="relative">
+                                <i data-lucide="user" class="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size="20"></i>
+                                <input id="login_id" type="text" placeholder="รหัสนักศึกษา 8 หลัก" class="w-full p-5 pl-14 rounded-2xl bg-slate-50 border-2 border-slate-100 font-bold text-lg outline-none focus:border-indigo-500 focus:bg-white shadow-inner transition-all" required pattern="[0-9]{8}" title="กรุณากรอกรหัสนักศึกษา 8 หลัก">
+                            </div>
+                            <button type="submit" class="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all text-base border-b-4 border-indigo-900 flex items-center justify-center gap-2">
+                                <span>เข้าสู่ระบบ</span>
+                                <i data-lucide="arrow-right" size="18"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderStudentView() {
+            const data = window.state.currentStudentData;
+            const sid = window.state.studentId;
+            const myConf = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
+            
+            const isAllConfirmed = myConf.s1 && myConf.s2 && myConf.s3;
+
+            return `
+                ${renderHeader('ตรวจสอบข้อมูล', `ID: ${sid}`)}
+                <div class="scrollable-content custom-scrollbar">
+                    <main class="max-w-2xl mx-auto px-4 py-6 space-y-6 page-transition relative">
+                        
+                        <!-- Warning Banner -->
+                        <div class="bg-orange-50 border-2 border-orange-200 rounded-[2rem] p-6 shadow-sm flex items-start gap-4">
+                            <div class="w-12 h-12 bg-orange-100 text-orange-500 rounded-2xl flex items-center justify-center flex-shrink-0"><i data-lucide="alert-triangle" size="24"></i></div>
+                            <div>
+                                <h3 class="font-black text-orange-700 text-base uppercase">โปรดให้ความสำคัญ</h3>
+                                <p class="text-xs font-medium text-orange-600 mt-1 leading-relaxed">
+                                    โปรดตรวจเช็คความถูกต้องของข้อมูลทั้งหมด และแก้ไขในวันเวลาที่กำหนด <br>
+                                    <strong class="text-orange-800 bg-orange-200/50 px-1 rounded">ไม่เช่นนั้นจะถือว่าข้อมูลถูกต้อง</strong>
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Section 1: ข้อมูลส่วนตัว -->
+                        ${renderDataCard(
+                            "1", "ข้อมูลส่วนตัวทั้งหมด", "user",
+                            [
+                                { label: "1.1 รหัสนักศึกษา", value: data['1.1'], id: '1.1' },
+                                { label: "1.2 ชื่อ-นามสกุล", value: data['1.2'], id: '1.2' },
+                                { label: "1.3 ข้อมูลติดต่อ", value: data['1.3'], id: '1.3' }
+                            ],
+                            's1', myConf.s1
+                        )}
+
+                        <!-- Section 2: ข้อมูลวิทยานิพนธ์ -->
+                        ${renderDataCard(
+                            "2", "ข้อมูลวิทยานิพนธ์", "book-open",
+                            [
+                                { label: "2.1 ชื่อวิทยานิพนธ์", value: data['2.1'], id: '2.1' },
+                                { label: "2.2 ชื่ออาจารย์ที่ปรึกษา", value: data['2.2'], id: '2.2' },
+                                { label: "2.3 ประเภทของงาน", value: data['2.3'], id: '2.3' }
+                            ],
+                            's2', myConf.s2
+                        )}
+
+                        <!-- Section 3: ไฟล์ภาพ -->
+                        ${renderDataCard(
+                            "3", "ไฟล์ภาพและผลงาน", "image",
+                            [
+                                { label: "3.1 ไฟล์ภาพหน้าปก และภาพรอง", value: data['3.1'], id: '3.1' },
+                                { label: "3.2 ไฟล์ภาพถ่ายส่วนตัว", value: data['3.2'], id: '3.2' },
+                                { label: "3.3 ไฟล์ผลงานทั้งหมด", value: data['3.3'], id: '3.3' }
+                            ],
+                            's3', myConf.s3
+                        )}
+
+                        <div class="h-20"></div> <!-- Spacer for sticky button -->
+                    </main>
+                </div>
+                
+                <!-- Sticky Actions -->
+                <div class="fixed bottom-0 left-0 right-0 glass-bottom z-40 pb-6 pt-10 px-4 pointer-events-none">
+                    <div class="max-w-2xl mx-auto flex gap-3 pointer-events-auto">
+                        <a id="student-edit-btn" href="${window.state.settings.editFormUrl || '#'}" target="_blank" onclick="${!window.state.settings.editFormUrl ? "event.preventDefault(); window.uiAlert('แอดมินยังไม่ได้ตั้งค่าลิงก์แก้ไขข้อมูล', 'error');" : ""}" 
+                           class="flex-1 py-4 bg-white text-red-500 font-bold rounded-2xl shadow-xl hover:bg-red-50 active:scale-95 transition-all text-sm uppercase tracking-widest border-2 border-red-100 flex items-center justify-center gap-2">
+                            <i data-lucide="file-edit" size="18"></i> แจ้งแก้ไขข้อมูล
+                        </a>
+                        ${isAllConfirmed ? `
+                            <div id="student-status-btn" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-default transition-all">
+                                <i data-lucide="check-circle-2" size="18"></i> ยืนยันครบถ้วน
+                            </div>
+                        ` : `
+                            <div id="student-status-btn" class="flex-1 py-4 bg-slate-200 text-slate-400 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-2 text-[11px] uppercase tracking-widest cursor-not-allowed transition-all">
+                                โปรดยืนยันให้ครบ 3 ส่วน
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderDataCard(sectionNum, title, icon, fields, stateKey, isConfirmed) {
+            return `
+                <div id="card-${stateKey}" class="bg-white p-6 rounded-[2rem] border ${isConfirmed ? 'border-green-400 ring-4 ring-green-50' : 'border-slate-200'} shadow-sm transition-all duration-300">
+                    <div class="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
+                        <div id="icon-box-${stateKey}" class="w-10 h-10 ${isConfirmed ? 'bg-green-100 text-green-600' : 'bg-indigo-50 text-indigo-600'} rounded-xl flex items-center justify-center transition-all">
+                            <i data-lucide="${icon}" size="20"></i>
+                        </div>
+                        <h2 class="text-lg font-black text-slate-800 tracking-tight">ส่วนที่ ${sectionNum}: ${title}</h2>
+                    </div>
+                    
+                    <div class="space-y-4 mb-6">
+                        ${fields.map(f => `
+                            <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                                <p class="text-[10px] font-bold text-slate-400 uppercase mb-1 tracking-widest">${f.label}</p>
+                                <p id="val-${f.id.replace('.', '-')}" class="text-sm font-semibold text-slate-800 break-words">${f.value || '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>'}</p>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <button id="btn-conf-${stateKey}" onclick="window.toggleConfirmation('${stateKey}')" 
+                            class="w-full py-4 rounded-xl font-bold flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${isConfirmed ? 'bg-green-500 text-white shadow-lg shadow-green-200 border-b-4 border-green-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}">
+                        <i data-lucide="${isConfirmed ? 'check-square' : 'square'}" size="20"></i>
+                        <span>${isConfirmed ? 'ยืนยันความถูกต้องแล้ว' : 'คลิกเพื่อยืนยันว่าข้อมูลถูกต้อง'}</span>
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderAdminView() {
+            const students = window.state.sheetData;
+            const total = students.length;
+            
+            // Calculate Confirmed Stats
+            let confirmedCount = 0;
+            const studentStatusList = students.map(s => {
+                const sid = s['1.1'];
+                const conf = window.state.confirmations[sid] || {};
+                const isAllConfirmed = conf.s1 && conf.s2 && conf.s3;
+                if (isAllConfirmed) confirmedCount++;
+                return { ...s, isAllConfirmed, conf };
+            });
+
+            return `
+                ${renderHeader('Administrator', 'ระบบจัดการข้อมูล')}
+                <div class="scrollable-content custom-scrollbar">
+                    <main class="max-w-4xl mx-auto px-4 py-6 space-y-6 page-transition text-left">
+                        
+                        <!-- Dashboard Stats -->
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="bg-indigo-600 p-6 rounded-[2rem] text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
+                                <i data-lucide="users" size="80" class="absolute -right-4 -bottom-4 text-white opacity-10"></i>
+                                <p class="text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1">ข้อมูลทั้งหมด</p>
+                                <p id="admin-total-count" class="text-4xl font-black">${total} <span class="text-sm font-normal opacity-80">คน</span></p>
+                            </div>
+                            <div class="bg-green-500 p-6 rounded-[2rem] text-white shadow-xl shadow-green-200 relative overflow-hidden">
+                                <i data-lucide="check-circle" size="80" class="absolute -right-4 -bottom-4 text-white opacity-10"></i>
+                                <p class="text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1">ยืนยันครบแล้ว</p>
+                                <p id="admin-confirmed-count" class="text-4xl font-black">${confirmedCount} <span class="text-sm font-normal opacity-80">คน</span></p>
+                            </div>
+                        </div>
+
+                        <!-- Admin Settings -->
+                        <div class="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
+                            <h2 class="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
+                                <i data-lucide="settings" class="text-indigo-600"></i> ตั้งค่าระบบ
+                            </h2>
+                            <form onsubmit="window.saveAdminSettings(event)" class="space-y-4">
+                                <div>
+                                    <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2 ml-1">ลิงก์ Google Form สำหรับให้นักศึกษาแจ้งแก้ไขข้อมูล</label>
+                                    <div class="flex gap-2 flex-col md:flex-row">
+                                        <input id="admin-form-url-input" type="url" name="formUrl" value="${window.state.settings.editFormUrl || ''}" placeholder="https://forms.gle/..." class="flex-1 p-4 rounded-2xl bg-slate-50 border-2 border-slate-100 font-medium text-sm outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner" required>
+                                        <button type="submit" class="py-4 px-8 bg-slate-900 text-white font-bold rounded-2xl shadow-lg hover:bg-black active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                            <i data-lucide="save" size="18"></i> บันทึก
+                                        </button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Student List -->
+                        <div class="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="flex justify-between items-end mb-6">
+                                <h2 class="text-xl font-black text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="list" class="text-indigo-600"></i> รายชื่อนักศึกษา
+                                </h2>
+                            </div>
+                            
+                            <div class="overflow-x-auto custom-scrollbar">
+                                <table class="w-full min-w-[600px] text-left border-collapse">
+                                    <thead class="border-b-2 border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                                        <tr>
+                                            <th class="pb-4 pl-2">รหัส / ชื่อ</th>
+                                            <th class="pb-4 text-center">ส่วนที่ 1</th>
+                                            <th class="pb-4 text-center">ส่วนที่ 2</th>
+                                            <th class="pb-4 text-center">ส่วนที่ 3</th>
+                                            <th class="pb-4 text-right pr-2">สถานะรวม</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="admin-table-body" class="divide-y divide-slate-50">
+                                        ${studentStatusList.map(s => `
+                                            <tr class="hover:bg-slate-50/50 transition-colors">
+                                                <td class="py-4 pl-2">
+                                                    <p class="font-black text-slate-800 text-sm">${s['1.1']}</p>
+                                                    <p class="text-[11px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
+                                                </td>
+                                                <td class="py-4 text-center">
+                                                    ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                                                </td>
+                                                <td class="py-4 text-center">
+                                                    ${s.conf.s2 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                                                </td>
+                                                <td class="py-4 text-center">
+                                                    ${s.conf.s3 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                                                </td>
+                                                <td class="py-4 text-right pr-2">
+                                                    ${s.isAllConfirmed 
+                                                        ? '<span class="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full uppercase border border-green-200"><i data-lucide="check" size="12"></i> สมบูรณ์</span>' 
+                                                        : '<span class="inline-flex items-center gap-1 px-3 py-1 bg-orange-50 text-orange-600 text-[10px] font-bold rounded-full uppercase border border-orange-200"><i data-lucide="clock" size="12"></i> รอดำเนินการ</span>'
+                                                    }
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            `;
+        }
+
+        function renderUIModal() {
+            if (!window.state.modal.show) return "";
+            return `
+                <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-6 page-transition">
+                    <div class="bg-white rounded-[2.5rem] p-8 max-w-sm w-full text-center shadow-2xl border border-white">
+                        <div class="w-16 h-16 ${window.state.modal.type === 'error' ? 'bg-red-50 text-red-500' : window.state.modal.type === 'success' ? 'bg-green-50 text-green-500' : 'bg-indigo-50 text-indigo-600'} rounded-3xl flex items-center justify-center mx-auto mb-5 shadow-inner">
+                            <i data-lucide="${window.state.modal.type === 'error' ? 'alert-octagon' : window.state.modal.type === 'success' ? 'check-circle' : 'info'}" size="32"></i>
+                        </div>
+                        <h3 class="text-lg font-black text-slate-800 mb-2 leading-tight">${window.state.modal.title}</h3>
+                        <p class="text-sm text-slate-500 font-medium leading-relaxed">${window.state.modal.message}</p>
+                        <button onclick="window.closeModal()" class="w-full mt-6 py-4 bg-slate-900 text-white font-bold rounded-2xl shadow-lg hover:bg-black active:scale-95 transition-all">ตกลง</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            
+            if (window.state.isLoading) return; // Keep showing loader html defined in body initially
+
+            let mainContent = '';
+            if (window.state.view === 'login') {
+                mainContent = renderLogin();
+            } else if (window.state.view === 'student') {
+                mainContent = renderStudentView();
+            } else if (window.state.view === 'admin') {
+                mainContent = renderAdminView();
+            }
+
+            app.innerHTML = mainContent;
+            window.updateModalUI();
+            lucide.createIcons();
+        }
+
+        // Start App
+        init();
+
+    </script>
+</body>
+</html>
