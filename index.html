@@ -184,7 +184,8 @@
             loginStep: 'id', // 'id' or 'otp'
             serverOtp: '',
             refCode: '',
-            otpLoading: false
+            otpLoading: false,
+            isSessionCheckDone: false // เพิ่มสถานะการตรวจสอบเซสชัน
         };
 
         window.cachedExportDataURLs = []; 
@@ -300,11 +301,18 @@
                 onAuthStateChanged(auth, async (u) => {
                     window.state.user = u;
                     if (u) {
+                        // เริ่มดึงข้อมูลเบื้องหลัง
                         listenToData();
+                        
+                        // สำคัญ: ตรวจสอบเซสชันก่อนจะเปลี่ยนสถานะ isLoading
                         if (window.state.isRestoringSession) {
                             await tryRestoreSession();
                             window.state.isRestoringSession = false;
                         }
+                        
+                        // ระบุว่าตรวจสอบเซสชันเสร็จแล้ว
+                        window.state.isSessionCheckDone = true;
+
                         const pollData = async () => {
                             await fetchSheetData(true); 
                             window.pollingTimer = setTimeout(pollData, 5000);
@@ -328,7 +336,11 @@
                     const data = sessionDoc.data();
                     const now = Date.now();
                     const diffMinutes = (now - data.loginTimestamp) / 1000 / 60;
-                    if (diffMinutes < (window.state.settings.sessionDuration || 30)) {
+                    
+                    // ใช้ค่า sessionDuration จาก data ถ้ามี หรือใช้ 30 นาทีเป็นค่ามาตรฐาน
+                    const limit = data.sessionDuration || window.state.settings.sessionDuration || 30;
+                    
+                    if (diffMinutes < limit) {
                         window.state.studentId = data.studentId;
                         window.state.isAdmin = data.isAdmin;
                         window.state.currentStudentData = data.currentStudentData;
@@ -360,13 +372,20 @@
                     fetchSheetData(false);
                 }
 
-                if (window.state.isLoading) {
+                // รอให้ทั้งข้อมูลมาถึง และ การตรวจสอบเซสชันเสร็จสิ้น
+                if (window.state.isLoading && window.state.isSessionCheckDone) {
                     window.state.isLoading = false;
                     render();
-                } else {
+                } else if (!window.state.isLoading) {
                     window.softUpdateUI();
                 }
-            }, (error) => { console.error("Snapshot error:", error); window.state.isLoading = false; render(); });
+            }, (error) => { 
+                console.error("Snapshot error:", error); 
+                if (window.state.isSessionCheckDone) {
+                    window.state.isLoading = false; 
+                    render(); 
+                }
+            });
 
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), (s) => {
                 if (s.exists()) {
@@ -379,7 +398,7 @@
             }, (error) => { console.error("Snapshot error:", error); });
         }
 
-        // --- Actions ---
+        // --- OTP Actions ---
         window.requestOtp = async (e) => {
             if (e) e.preventDefault();
             const inputId = document.getElementById('login_id').value.trim();
@@ -397,7 +416,7 @@
                 const otp = Math.floor(100000 + Math.random() * 900000).toString();
                 const ref = Math.random().toString(36).substring(2, 6).toUpperCase();
 
-                // Call Google Apps Script API
+                // เรียก API Google Apps Script
                 await fetch(OTP_API_URL, {
                     method: 'POST',
                     mode: 'no-cors',
@@ -409,10 +428,9 @@
                     })
                 });
 
-                // Set state for OTP step
                 window.state.serverOtp = otp;
                 window.state.refCode = ref;
-                window.state.studentId = inputId;
+                window.state.studentId = inputId; // เก็บค่ารหัสนักศึกษาไว้ไม่ล้างออก
                 window.state.isAdmin = isAdmin;
                 window.state.currentStudentData = student || null;
                 window.state.loginStep = 'otp';
@@ -429,17 +447,14 @@
 
         window.handleOtpInput = (e, index) => {
             const val = e.target.value;
-            // กรองเฉพาะตัวเลข
-            e.target.value = val.replace(/[^0-9]/g, '');
+            e.target.value = val.replace(/[^0-9]/g, ''); // กรองเฉพาะตัวเลข
             
-            // Auto focus next
             if (e.target.value.length === 1 && index < 6) {
                 document.getElementById(`otp-${index + 1}`).focus();
             }
         };
 
         window.handleOtpKeyDown = (e, index) => {
-            // Handle Backspace
             if (e.key === 'Backspace' && !e.target.value && index > 1) {
                 document.getElementById(`otp-${index - 1}`).focus();
             }
@@ -456,14 +471,15 @@
                 window.state.loginTimestamp = Date.now();
                 window.state.view = window.state.isAdmin ? 'admin' : 'student';
                 
-                // บันทึกเซสชันลง Firestore
                 if (window.state.user) {
                     try {
+                        // บันทึกระยะเวลาเซสชันปัจจุบันไปด้วยเพื่อให้ Persistence แม่นยำ
                         await setDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'), {
                             studentId: window.state.studentId,
                             isAdmin: window.state.isAdmin,
                             loginTimestamp: window.state.loginTimestamp,
-                            currentStudentData: window.state.currentStudentData
+                            currentStudentData: window.state.currentStudentData,
+                            sessionDuration: window.state.settings.sessionDuration
                         });
                     } catch (err) { console.error("Save session failed", err); }
                 }
@@ -968,7 +984,7 @@
                                                 <p class="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-1">ส่งรหัสไปที่</p>
                                                 <p class="text-xs font-bold text-slate-700">${sId}@kmitl.ac.th</p>
                                             </div>
-                                            <div class="bg-indigo-200/50 px-2 py-1 rounded text-[9px] font-black text-indigo-700">REF: ${window.state.refCode}</div>
+                                            <div class="bg-indigo-200/50 px-2 py-1 rounded text-[9px] font-black text-indigo-700 uppercase tracking-tighter">Ref: ${window.state.refCode}</div>
                                         </div>
                                     </div>
 
@@ -982,7 +998,7 @@
                                     </div>
 
                                     <div class="space-y-3">
-                                        <button type="submit" class="w-full py-4 bg-kmitl text-white font-bold rounded-xl shadow-xl hover:opacity-90 active:scale-95 transition-all text-sm border-b-4 border-orange-800 flex items-center justify-center gap-2">
+                                        <button type="submit" class="w-full py-4 bg-kmitl text-white font-bold rounded-xl shadow-xl hover:opacity-90 active:scale-95 transition-all text-sm border-b-4 border-orange-800 flex items-center justify-center gap-2 uppercase tracking-widest">
                                             <span>ยืนยัน</span>
                                             <i data-lucide="check-circle" size="18"></i>
                                         </button>
