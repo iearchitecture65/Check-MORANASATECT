@@ -13,7 +13,6 @@
     
     <!-- Export Libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <!-- เปลี่ยนมาใช้ html-to-image และ jsPDF ตามที่ระบุ -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
@@ -60,7 +59,7 @@
             flex: 1;
             overflow-y: auto;
             -webkit-overflow-scrolling: touch;
-            padding-bottom: calc(100px + env(safe-area-inset-bottom)); 
+            padding-bottom: calc(80px + env(safe-area-inset-bottom)); 
             scroll-behavior: smooth;
         }
         .safe-pt { padding-top: env(safe-area-inset-top); }
@@ -84,8 +83,8 @@
 
     <div id="app">
         <div class="flex flex-col items-center justify-center h-full text-indigo-600 gap-4">
-            <div class="animate-spin rounded-full h-12 w-12 border-t-4 border-indigo-600 border-opacity-30"></div>
-            <p class="font-bold text-sm tracking-widest uppercase animate-pulse">กำลังโหลดระบบ...</p>
+            <div class="animate-spin rounded-full h-10 w-10 border-t-4 border-indigo-600 border-opacity-30"></div>
+            <p class="font-bold text-xs tracking-widest uppercase animate-pulse">กำลังโหลดระบบ...</p>
         </div>
     </div>
     
@@ -101,7 +100,7 @@
         import { getFirestore, doc, collection, onSnapshot, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
 
-        // ตั้งค่าเชื่อมต่อฐานข้อมูล Firebase ของคุณ (moranasatect)
+        // ตั้งค่าเชื่อมต่อฐานข้อมูล Firebase ของคุณ
         const firebaseConfig = {
             apiKey: "AIzaSyD1z-AufMcsNqnbm3uUjoniuhdmDksYHMY",
             authDomain: "moranasatect.firebaseapp.com",
@@ -119,8 +118,24 @@
         const db = getFirestore(app);
         const appId = 'thesis-check-app';
 
-        // Google Sheet CSV Export URL
-        const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRyI-a9eEarynPfuWWbpTqHvz-vDHBGnE1UnvqvDOGIAA9nWybOkfS2jlI3xJRrpFAuR5nmWup9169/pub?gid=1223023440&single=true&output=csv";
+        // การตั้งค่าเริ่มต้น
+        const DEFAULT_LABELS = {
+            "s1_title": "ข้อมูลส่วนตัวทั้งหมด",
+            "1.1": "1.1 รหัสนักศึกษา 8 หลัก",
+            "1.2": "1.2 ชื่อ-นามสกุล (ชื่อเล่น)",
+            "1.3": "1.3 ข้อมูลติดต่อ (instagram, ฯลฯ)",
+            "s2_title": "ข้อมูลวิทยานิพนธ์",
+            "2.1": "2.1 ชื่อวิทยานิพนธ์ (ทั้งภาษาไทย และภาษาอังกฤษ)",
+            "2.2": "2.2 ชื่ออาจารย์ที่ปรึกษา",
+            "2.3": "2.3 ประเภทของงาน",
+            "2.4": "2.4 คำอธิบายงาน",
+            "s3_title": "ไฟล์ภาพ",
+            "3.1": "3.1 ไฟล์ภาพหน้าปก และภาพรอง",
+            "3.2": "3.2 ไฟล์ภาพถ่ายส่วนตัว",
+            "3.3": "3.3 ไฟล์ผลงานทั้งหมด"
+        };
+
+        const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRyI-a9eEarynPfuWWbpTqHvz-vDHBGnE1UnvqvDOGIAA9nWybOkfS2jlI3xJRrpFAuR5nmWup9169/pub?gid=1223023440&single=true&output=csv";
 
         window.state = {
             view: 'login', 
@@ -129,14 +144,18 @@
             isAdmin: false,
             sheetData: [],
             currentStudentData: null,
-            settings: { editFormUrl: "" },
+            settings: { 
+                editFormUrl: "",
+                sheetUrl: DEFAULT_SHEET_URL,
+                labels: { ...DEFAULT_LABELS }
+            },
             confirmations: {}, 
             isLoading: true,
             modal: { show: false, title: '', message: '', type: 'info' },
-            showPreviewModal: false // สถานะโชว์หน้าต่างพรีวิว
+            showPreviewModal: false 
         };
 
-        window.cachedExportDataURLs = []; // สำหรับเก็บข้อมูลภาพที่จะส่งออก
+        window.cachedExportDataURLs = []; 
 
         // ฟังก์ชันสำหรับแปลงข้อความที่มีลิงก์ ให้สามารถคลิกได้
         window.formatValue = (text) => {
@@ -173,7 +192,7 @@
         // --- Data Fetching ---
         async function fetchSheetData(isBackgroundPoll = false) {
             try {
-                const fetchUrl = SHEET_CSV_URL + "&t=" + new Date().getTime();
+                const fetchUrl = (window.state.settings.sheetUrl || DEFAULT_SHEET_URL) + "&t=" + new Date().getTime();
                 const response = await fetch(fetchUrl);
                 if (!response.ok) throw new Error("HTTP Status " + response.status);
                 const csvText = await response.text();
@@ -182,7 +201,7 @@
                 if (parsed.length > 0) {
                     const headers = parsed[0];
                     const dataRows = parsed.slice(1);
-                    const prefixes = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '3.1', '3.2', '3.3'];
+                    const prefixes = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '2.4', '3.1', '3.2', '3.3'];
                     const headerMap = {};
                     prefixes.forEach(p => headerMap[p] = []);
 
@@ -206,14 +225,17 @@
                         if (window.state.view === 'student' && window.state.studentId) {
                             window.state.currentStudentData = window.state.sheetData.find(row => row['1.1'] === window.state.studentId) || window.state.currentStudentData;
                         }
-                        if (!window.state.isLoading) window.softUpdateUI();
+                        if (!window.state.isLoading) {
+                            window.softUpdateUI();
+                            window.verifyConfirmationsAgainstData();
+                        }
                     }
                 }
             } catch (error) {
                 if (!isBackgroundPoll) {
                     console.error("Error fetching sheet:", error);
                     window.state.sheetData = [
-                        { "1.1": "65030001", "1.2": "นายใจดี เรียนเก่ง (ดี)", "1.3": "IG: jaidee_th\nhttps://instagram.com", "2.1": "การศึกษา AI (Study of AI)", "2.2": "ผศ.ดร.สมชาย ใจมั่น", "2.3": "วิจัยเชิงทดลอง", "3.1": "https://drive.google.com/drive/1", "3.2": "https://drive.google.com/drive/2", "3.3": "https://drive.google.com/drive/3" }
+                        { "1.1": "65030001", "1.2": "นายใจดี เรียนเก่ง (ดี)", "1.3": "IG: jaidee_th\nhttps://instagram.com", "2.1": "การศึกษา AI (Study of AI)", "2.2": "ผศ.ดร.สมชาย ใจมั่น", "2.3": "วิจัยเชิงทดลอง", "2.4": "สร้างแบบจำลอง AI สำหรับผู้สูงอายุ", "3.1": "https://drive.google.com/drive/1", "3.2": "https://drive.google.com/drive/2", "3.3": "https://drive.google.com/drive/3" }
                     ];
                     if(window.state.isLoading) {
                         window.uiAlert("เกิดข้อผิดพลาดในการโหลดข้อมูลจริง กำลังแสดงข้อมูลจำลองเพื่อการทดสอบ", "info");
@@ -235,7 +257,6 @@
                 onAuthStateChanged(auth, async (u) => {
                     window.state.user = u;
                     if (u) {
-                        await fetchSheetData(false); 
                         listenToData();
 
                         const pollData = async () => {
@@ -255,8 +276,20 @@
 
         function listenToData() {
             if (!window.state.user) return;
+            
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), (s) => {
-                if (s.exists()) window.state.settings = { ...window.state.settings, ...s.data() };
+                const oldSheetUrl = window.state.settings.sheetUrl;
+                if (s.exists()) {
+                    const data = s.data();
+                    window.state.settings.editFormUrl = data.editFormUrl ?? window.state.settings.editFormUrl;
+                    window.state.settings.sheetUrl = data.sheetUrl ?? window.state.settings.sheetUrl;
+                    window.state.settings.labels = { ...window.state.settings.labels, ...(data.labels || {}) };
+                }
+
+                if (oldSheetUrl !== window.state.settings.sheetUrl || window.state.sheetData.length === 0) {
+                    fetchSheetData(false);
+                }
+
                 if (window.state.isLoading) {
                     window.state.isLoading = false;
                     render();
@@ -266,8 +299,13 @@
             }, (error) => { console.error("Snapshot error:", error); window.state.isLoading = false; render(); });
 
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), (s) => {
-                if (s.exists()) window.state.confirmations = s.data();
-                if (!window.state.isLoading) window.softUpdateUI();
+                if (s.exists()) {
+                    window.state.confirmations = s.data();
+                    if (!window.state.isLoading) {
+                        window.softUpdateUI();
+                        window.verifyConfirmationsAgainstData();
+                    }
+                }
             }, (error) => { console.error("Snapshot error:", error); });
         }
 
@@ -301,11 +339,68 @@
             render();
         };
 
+        // ตรวจสอบและยกเลิกการยืนยันอัตโนมัติหากข้อมูลเปลี่ยนไปจากตอนที่กดยืนยัน
+        window.verifyConfirmationsAgainstData = async () => {
+            if (!window.state.user || !window.state.sheetData.length || Object.keys(window.state.confirmations).length === 0) return;
+
+            let currentConf = JSON.parse(JSON.stringify(window.state.confirmations));
+            let hasChanges = false;
+            let currentStudentUnchecked = false;
+
+            window.state.sheetData.forEach(row => {
+                const sid = row['1.1'];
+                if (currentConf[sid]) {
+                    const s1_hash = `${row['1.1']}|${row['1.2']}|${row['1.3']}`;
+                    const s2_hash = `${row['2.1']}|${row['2.2']}|${row['2.3']}|${row['2.4']}`;
+                    const s3_hash = `${row['3.1']}|${row['3.2']}|${row['3.3']}`;
+
+                    if (currentConf[sid].s1 && currentConf[sid].s1_hash && currentConf[sid].s1_hash !== s1_hash) {
+                        currentConf[sid].s1 = false;
+                        hasChanges = true;
+                        if(window.state.studentId === sid) currentStudentUnchecked = true;
+                    }
+                    if (currentConf[sid].s2 && currentConf[sid].s2_hash && currentConf[sid].s2_hash !== s2_hash) {
+                        currentConf[sid].s2 = false;
+                        hasChanges = true;
+                        if(window.state.studentId === sid) currentStudentUnchecked = true;
+                    }
+                    if (currentConf[sid].s3 && currentConf[sid].s3_hash && currentConf[sid].s3_hash !== s3_hash) {
+                        currentConf[sid].s3 = false;
+                        hasChanges = true;
+                        if(window.state.studentId === sid) currentStudentUnchecked = true;
+                    }
+                }
+            });
+
+            if (hasChanges && window.state.user) {
+                try {
+                    window.state.confirmations = currentConf;
+                    window.softUpdateUI();
+                    
+                    if (currentStudentUnchecked && window.state.view === 'student') {
+                         window.uiAlert("ข้อมูลมีการเปลี่ยนแปลงจากระบบส่วนกลาง การยืนยันก่อนหน้านี้จึงถูกยกเลิก โปรดตรวจสอบและยืนยันใหม่อีกครั้ง", "info");
+                    }
+
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), currentConf, { merge: true });
+                } catch(e) {
+                    console.error("Auto uncheck error", e);
+                }
+            }
+        };
+
         window.toggleConfirmation = async (section) => {
             if (!window.state.user) return;
             const sid = window.state.studentId;
+            const data = window.state.currentStudentData;
+            
             let currentData = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
             let updatedData = { ...currentData, [section]: !currentData[section] };
+            
+            // บันทึก Hash ของข้อมูล ณ ปัจจุบัน เพื่อใช้เทียบเวลามีคนแก้ข้อมูลทีหลัง
+            if (updatedData.s1) updatedData.s1_hash = `${data['1.1']}|${data['1.2']}|${data['1.3']}`;
+            if (updatedData.s2) updatedData.s2_hash = `${data['2.1']}|${data['2.2']}|${data['2.3']}|${data['2.4']}`;
+            if (updatedData.s3) updatedData.s3_hash = `${data['3.1']}|${data['3.2']}|${data['3.3']}`;
+            
             let newConfirmations = { ...window.state.confirmations, [sid]: updatedData };
             window.state.confirmations = newConfirmations;
             window.softUpdateUI();
@@ -321,13 +416,21 @@
         window.softUpdateUI = () => {
             if (window.state.view === 'student' && window.state.currentStudentData) {
                 const data = window.state.currentStudentData;
-                const fields = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '3.1', '3.2', '3.3'];
+                const labels = window.state.settings.labels;
+                
+                const fields = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '2.4', '3.1', '3.2', '3.3'];
                 fields.forEach(id => {
                     const el = document.getElementById(`val-${id.replace('.', '-')}`);
                     if (el) {
                         el.innerHTML = window.formatValue(data[id]);
                         lucide.createIcons({root: el});
                     }
+                });
+
+                const labelIds = ['s1_title', 's2_title', 's3_title', '1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '2.4', '3.1', '3.2', '3.3'];
+                labelIds.forEach(key => {
+                    const el = document.getElementById(`lbl-${key.replace('.', '-')}`);
+                    if (el) el.innerText = labels[key] || '';
                 });
 
                 const sid = window.state.studentId;
@@ -340,10 +443,10 @@
                     const iconBox = document.getElementById(`icon-box-${key}`);
                     if (btn && card && iconBox) {
                         const isConf = myConf[key];
-                        card.className = `bg-white p-6 rounded-[2rem] border ${isConf ? 'border-green-400 ring-4 ring-green-50' : 'border-slate-200'} shadow-sm transition-all duration-300`;
-                        iconBox.className = `w-10 h-10 ${isConf ? 'bg-green-100 text-green-600' : 'bg-indigo-50 text-indigo-600'} rounded-xl flex items-center justify-center transition-all`;
-                        btn.className = `w-full py-4 rounded-xl font-bold flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${isConf ? 'bg-green-500 text-white shadow-lg shadow-green-200 border-b-4 border-green-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`;
-                        btn.innerHTML = `<i data-lucide="${isConf ? 'check-square' : 'square'}" size="20"></i><span>${isConf ? 'ยืนยันความถูกต้องแล้ว' : 'คลิกเพื่อยืนยันว่าข้อมูลถูกต้อง'}</span>`;
+                        card.className = `bg-white p-4 md:p-5 rounded-2xl border ${isConf ? 'border-green-400 ring-4 ring-green-50' : 'border-slate-200'} shadow-sm transition-all duration-300`;
+                        iconBox.className = `w-8 h-8 ${isConf ? 'bg-green-100 text-green-600' : 'bg-indigo-50 text-indigo-600'} rounded-lg flex items-center justify-center transition-all`;
+                        btn.className = `w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${isConf ? 'bg-green-500 text-white shadow-lg shadow-green-200 border-b-4 border-green-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`;
+                        btn.innerHTML = `<i data-lucide="${isConf ? 'check-square' : 'square'}" size="16"></i><span class="text-sm">${isConf ? 'ยืนยันความถูกต้องแล้ว' : 'คลิกเพื่อยืนยันว่าข้อมูลถูกต้อง'}</span>`;
                     }
                 });
 
@@ -356,71 +459,46 @@
                 const bottomBar = document.getElementById('student-status-btn');
                 if (bottomBar) {
                     if (isAllConfirmed) {
-                        bottomBar.outerHTML = `<button id="student-status-btn" onclick="window.uiAlert('คุณได้ยืนยันข้อมูลครบถ้วนทั้ง 3 ส่วนเรียบร้อยแล้ว ขอบคุณครับ', 'success')" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 hover:bg-green-600 active:scale-[0.98] flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-pointer transition-all"><i data-lucide="check-circle-2" size="18"></i> ยืนยันครบถ้วน</button>`;
+                        bottomBar.outerHTML = `<button id="student-status-btn" onclick="window.uiAlert('คุณได้ยืนยันข้อมูลครบถ้วนทั้ง 3 ส่วนเรียบร้อยแล้ว ขอบคุณครับ', 'success')" class="flex-1 py-3 bg-green-500 text-white font-bold rounded-xl shadow-xl border-b-4 border-green-700 hover:bg-green-600 active:scale-[0.98] flex items-center justify-center gap-2 text-xs uppercase tracking-widest cursor-pointer transition-all"><i data-lucide="check-circle-2" size="16"></i> ยืนยันครบถ้วน</button>`;
                     } else {
-                        bottomBar.outerHTML = `<div id="student-status-btn" class="flex-1 py-4 bg-slate-200 text-slate-400 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-2 text-[11px] uppercase tracking-widest cursor-not-allowed transition-all">โปรดยืนยันให้ครบ 3 ส่วน</div>`;
+                        bottomBar.outerHTML = `<div id="student-status-btn" class="flex-1 py-3 bg-slate-200 text-slate-400 font-bold rounded-xl shadow-sm flex items-center justify-center gap-2 text-[10px] uppercase tracking-widest cursor-not-allowed transition-all">โปรดยืนยันให้ครบ 3 ส่วน</div>`;
                     }
                 }
                 lucide.createIcons();
                 
             } else if (window.state.view === 'admin') {
-                const students = window.state.sheetData;
-                let confirmedCount = 0;
-                const studentStatusList = students.map(s => {
-                    const sid = s['1.1'];
-                    const conf = window.state.confirmations[sid] || {};
-                    const isAllConfirmed = conf.s1 && conf.s2 && conf.s3;
-                    if (isAllConfirmed) confirmedCount++;
-                    return { ...s, isAllConfirmed, conf };
-                });
-
-                const totalEl = document.getElementById('admin-total-count');
-                if (totalEl) totalEl.innerHTML = `${students.length} <span class="text-sm font-normal opacity-80">คน</span>`;
-                
-                const confEl = document.getElementById('admin-confirmed-count');
-                if (confEl) confEl.innerHTML = `${confirmedCount} <span class="text-sm font-normal opacity-80">คน</span>`;
-
-                const formUrlInput = document.getElementById('admin-form-url-input');
-                if (formUrlInput && document.activeElement !== formUrlInput) {
-                    formUrlInput.value = window.state.settings.editFormUrl || '';
-                }
-
-                const tbody = document.getElementById('admin-table-body');
-                if (tbody) {
-                    tbody.innerHTML = studentStatusList.map(s => `
-                        <tr class="hover:bg-slate-50/50 transition-colors">
-                            <td class="py-4 pl-2">
-                                <p class="font-black text-slate-800 text-sm">${s['1.1']}</p>
-                                <p class="text-[11px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
-                            </td>
-                            <td class="py-4 text-center">
-                                ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
-                            </td>
-                            <td class="py-4 text-center">
-                                ${s.conf.s2 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
-                            </td>
-                            <td class="py-4 text-center">
-                                ${s.conf.s3 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
-                            </td>
-                            <td class="py-4 text-right pr-2">
-                                ${s.isAllConfirmed 
-                                    ? '<span class="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full uppercase border border-green-200"><i data-lucide="check" size="12"></i> สมบูรณ์</span>' 
-                                    : '<span class="inline-flex items-center gap-1 px-3 py-1 bg-orange-50 text-orange-600 text-[10px] font-bold rounded-full uppercase border border-orange-200"><i data-lucide="clock" size="12"></i> รอดำเนินการ</span>'
-                                }
-                            </td>
-                        </tr>
-                    `).join('');
-                    lucide.createIcons();
+                if (document.getElementById('admin-total-count')) {
+                    render(); 
                 }
             }
         };
 
         window.saveAdminSettings = async (e) => {
             e.preventDefault();
-            const url = e.target.formUrl.value.trim();
+            const form = e.target;
+            const newSettings = {
+                editFormUrl: form.formUrl.value.trim(),
+                sheetUrl: form.sheetUrl.value.trim(),
+                labels: {
+                    "s1_title": form.lbl_s1_title.value.trim(),
+                    "1.1": form.lbl_1_1.value.trim(),
+                    "1.2": form.lbl_1_2.value.trim(),
+                    "1.3": form.lbl_1_3.value.trim(),
+                    "s2_title": form.lbl_s2_title.value.trim(),
+                    "2.1": form.lbl_2_1.value.trim(),
+                    "2.2": form.lbl_2_2.value.trim(),
+                    "2.3": form.lbl_2_3.value.trim(),
+                    "2.4": form.lbl_2_4.value.trim(),
+                    "s3_title": form.lbl_s3_title.value.trim(),
+                    "3.1": form.lbl_3_1.value.trim(),
+                    "3.2": form.lbl_3_2.value.trim(),
+                    "3.3": form.lbl_3_3.value.trim()
+                }
+            };
+
             try {
-                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), { editFormUrl: url }, { merge: true });
-                window.uiAlert("บันทึกลิงก์ Google Form เรียบร้อยแล้ว", "success");
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), newSettings, { merge: true });
+                window.uiAlert("บันทึกการตั้งค่าระบบเรียบร้อยแล้ว ระบบกำลังดึงข้อมูลใหม่", "success");
             } catch (err) {
                 window.uiAlert("เกิดข้อผิดพลาดในการบันทึก", "error");
             }
@@ -450,11 +528,10 @@
             XLSX.writeFile(wb, "ThesisCheck_Data.xlsx");
         };
 
-        // สร้าง HTML แนวตั้ง (A4 Portrait = 794x1123 px) สำหรับถ่ายภาพ
         const generateExportPagesHTML = () => {
             const students = window.state.sheetData;
             const confirmations = window.state.confirmations;
-            const rowsPerPage = 20; // ปรับเพิ่มจำนวนแถวต่อหน้าเนื่องจากเป็นแนวตั้ง
+            const rowsPerPage = 20; 
             const pagesHtml = [];
             const totalPages = Math.ceil(students.length / rowsPerPage) || 1;
             const timestamp = new Date().toLocaleString('th-TH');
@@ -496,7 +573,6 @@
                             * { font-family: 'Prompt', sans-serif !important; }
                         </style>
                         
-                        <!-- Header -->
                         <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 4px solid #4f46e5; padding-bottom: 15px; margin-bottom: 25px;">
                             <div>
                                 <h1 style="margin: 0; font-size: 30px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: -0.5px;">ThesisCheck</h1>
@@ -508,7 +584,6 @@
                             </div>
                         </div>
                         
-                        <!-- Table Content -->
                         <div style="flex: 1; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background: #fff;">
                             <table style="width: 100%; border-collapse: collapse; text-align: left;">
                                 <thead>
@@ -526,7 +601,6 @@
                             </table>
                         </div>
                         
-                        <!-- Footer -->
                         <div style="text-align: center; font-size: 10px; color: #cbd5e1; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-top: 25px;">
                             Generated by ThesisCheck System
                         </div>
@@ -561,7 +635,6 @@
                     const wrap = renderer.querySelector(`[id^="capture-layout-wrapper"]`);
                     void wrap.offsetWidth; 
                     
-                    // รอให้ฟอนต์หรือสไตล์ปรับตัว
                     await new Promise(r => setTimeout(r, 500)); 
                     
                     const dataUrl = await htmlToImage.toPng(wrap, {
@@ -607,7 +680,6 @@
                     a.click();
                 });
             } else {
-                // สร้าง PDF แนวตั้ง (Portrait) ขนาด A4
                 const { jsPDF } = window.jspdf;
                 const pdf = new jsPDF('p', 'px', [794, 1123]);
                 window.cachedExportDataURLs.forEach((url, idx) => {
@@ -646,25 +718,25 @@
         // --- Render Functions ---
         function renderHeader(title, subtitle) {
             return `
-                <header class="bg-white border-b border-slate-100 flex-none px-6 z-50 shadow-sm flex items-center justify-between safe-pt min-h-[4.5rem]">
+                <header class="bg-white border-b border-slate-100 flex-none px-4 sm:px-6 z-50 shadow-sm flex items-center justify-between safe-pt min-h-[3.5rem]">
                     <div class="max-w-2xl mx-auto w-full flex items-center justify-between">
-                        <div class="flex items-center gap-3">
-                            <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200 relative">
-                                <i data-lucide="file-check-2" size="20"></i>
-                                <span class="absolute -top-1 -right-1 w-3 h-3 bg-green-400 border-2 border-white rounded-full animate-ping"></span>
-                                <span class="absolute -top-1 -right-1 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></span>
+                        <div class="flex items-center gap-2.5">
+                            <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-indigo-200 relative">
+                                <i data-lucide="file-check-2" size="16"></i>
+                                <span class="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-400 border-2 border-white rounded-full animate-ping"></span>
+                                <span class="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 border-2 border-white rounded-full"></span>
                             </div>
                             <div class="text-left leading-none">
-                                <h1 class="font-black text-sm text-slate-800 uppercase tracking-tight">${title}</h1>
-                                <p class="text-[9px] font-bold text-indigo-600 uppercase tracking-widest mt-1 flex items-center gap-1">
+                                <h1 class="font-black text-[13px] text-slate-800 uppercase tracking-tight">${title}</h1>
+                                <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mt-1 flex items-center gap-1">
                                     ${subtitle}
-                                    <span class="text-[8px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">Auto-Update</span>
+                                    <span class="text-[7px] text-green-600 bg-green-50 px-1 py-0.5 rounded border border-green-200">Auto</span>
                                 </p>
                             </div>
                         </div>
-                        <button onclick="window.logout()" class="p-3 bg-slate-50 text-slate-400 hover:text-red-500 rounded-xl border border-slate-100 active:scale-90 transition-all flex items-center gap-2">
-                            <span class="hidden sm:inline text-xs font-bold uppercase">ออกจากระบบ</span>
-                            <i data-lucide="log-out" size="18"></i>
+                        <button onclick="window.logout()" class="p-2 sm:px-3 bg-slate-50 text-slate-400 hover:text-red-500 rounded-lg border border-slate-100 active:scale-95 transition-all flex items-center gap-1.5">
+                            <span class="hidden sm:inline text-[11px] font-bold uppercase">ออกจากระบบ</span>
+                            <i data-lucide="log-out" size="16"></i>
                         </button>
                     </div>
                 </header>
@@ -673,25 +745,25 @@
 
         function renderLogin() {
             return `
-                <div class="h-[100dvh] w-full flex flex-col items-center justify-center p-6 bg-slate-50 relative overflow-hidden">
-                    <div class="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow"></div>
-                    <div class="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-blue-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow" style="animation-delay: 1s;"></div>
+                <div class="h-[100dvh] w-full flex flex-col items-center justify-center p-4 bg-slate-50 relative overflow-hidden">
+                    <div class="absolute top-[-10%] left-[-10%] w-72 h-72 bg-indigo-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow"></div>
+                    <div class="absolute bottom-[-10%] right-[-10%] w-72 h-72 bg-blue-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow" style="animation-delay: 1s;"></div>
                     
-                    <div class="max-w-sm w-full bg-white rounded-[2.5rem] p-10 shadow-2xl border border-white text-center page-transition relative z-10">
-                        <div class="w-20 h-20 bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-[1.5rem] flex items-center justify-center text-white mx-auto mb-8 shadow-xl shadow-indigo-200">
-                            <i data-lucide="shield-check" size="40"></i>
+                    <div class="max-w-sm w-full bg-white rounded-3xl p-8 shadow-2xl border border-white text-center page-transition relative z-10">
+                        <div class="w-16 h-16 bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-2xl flex items-center justify-center text-white mx-auto mb-6 shadow-xl shadow-indigo-200">
+                            <i data-lucide="shield-check" size="32"></i>
                         </div>
-                        <h1 class="text-3xl font-black text-slate-800 mb-2 tracking-tight">ThesisCheck</h1>
-                        <p class="text-slate-400 text-[10px] font-bold uppercase mt-2 tracking-widest opacity-80">ระบบตรวจสอบข้อมูลวิทยานิพนธ์</p>
+                        <h1 class="text-2xl font-black text-slate-800 mb-1 tracking-tight">ThesisCheck</h1>
+                        <p class="text-slate-400 text-[10px] font-bold uppercase mt-1 tracking-widest opacity-80">ระบบตรวจสอบข้อมูลวิทยานิพนธ์</p>
                         
-                        <form onsubmit="window.handleLogin(event)" class="mt-10 space-y-5">
+                        <form onsubmit="window.handleLogin(event)" class="mt-8 space-y-4">
                             <div class="relative">
-                                <i data-lucide="user" class="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size="20"></i>
-                                <input id="login_id" type="text" placeholder="รหัสนักศึกษา 8 หลัก" class="w-full p-5 pl-14 rounded-2xl bg-slate-50 border-2 border-slate-100 font-bold text-lg outline-none focus:border-indigo-500 focus:bg-white shadow-inner transition-all" required pattern="[0-9]{8}" title="กรุณากรอกรหัสนักศึกษา 8 หลัก">
+                                <i data-lucide="user" class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size="18"></i>
+                                <input id="login_id" type="text" placeholder="รหัสนักศึกษา 8 หลัก" class="w-full p-3.5 pl-11 rounded-xl bg-slate-50 border-2 border-slate-100 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white shadow-inner transition-all" required pattern="[0-9]{8}" title="กรุณากรอกรหัสนักศึกษา 8 หลัก">
                             </div>
-                            <button type="submit" class="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all text-base border-b-4 border-indigo-900 flex items-center justify-center gap-2">
+                            <button type="submit" class="w-full py-3.5 bg-indigo-600 text-white font-bold rounded-xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all text-sm border-b-4 border-indigo-900 flex items-center justify-center gap-2">
                                 <span>เข้าสู่ระบบ</span>
-                                <i data-lucide="arrow-right" size="18"></i>
+                                <i data-lucide="arrow-right" size="16"></i>
                             </button>
                         </form>
                     </div>
@@ -708,59 +780,39 @@
             return `
                 ${renderHeader('ตรวจสอบข้อมูล', `ID: ${sid}`)}
                 <div class="scrollable-content custom-scrollbar">
-                    <main class="max-w-2xl mx-auto px-4 py-6 space-y-6 page-transition relative">
-                        <div class="bg-orange-50 border-2 border-orange-200 rounded-[2rem] p-6 shadow-sm flex items-start gap-4">
-                            <div class="w-12 h-12 bg-orange-100 text-orange-500 rounded-2xl flex items-center justify-center flex-shrink-0"><i data-lucide="alert-triangle" size="24"></i></div>
+                    <main class="max-w-2xl mx-auto px-4 py-5 space-y-5 page-transition relative">
+                        <div class="bg-orange-50 border-2 border-orange-200 rounded-2xl p-4 shadow-sm flex items-start gap-3">
+                            <div class="w-10 h-10 bg-orange-100 text-orange-500 rounded-xl flex items-center justify-center flex-shrink-0"><i data-lucide="alert-triangle" size="20"></i></div>
                             <div>
-                                <h3 class="font-black text-orange-700 text-base uppercase">โปรดให้ความสำคัญ</h3>
-                                <p class="text-xs font-medium text-orange-600 mt-1 leading-relaxed">
+                                <h3 class="font-black text-orange-700 text-sm uppercase">โปรดให้ความสำคัญ</h3>
+                                <p class="text-[11px] font-medium text-orange-600 mt-1 leading-relaxed">
                                     โปรดตรวจเช็คความถูกต้องของข้อมูลทั้งหมด และแก้ไขในวันเวลาที่กำหนด <br>
-                                    <strong class="text-orange-800 bg-orange-200/50 px-1 rounded">ไม่เช่นนั้นจะถือว่าข้อมูลถูกต้อง</strong>
+                                    <strong class="text-orange-800 bg-orange-200/50 px-1 rounded">ไม่เช่นนั้นจะถือว่าถูกต้อง</strong>
                                 </p>
                             </div>
                         </div>
 
-                        ${renderDataCard("1", "ข้อมูลส่วนตัวทั้งหมด", "user",
-                            [
-                                { label: "1.1 รหัสนักศึกษา 8 หลัก", value: window.formatValue(data['1.1']), id: '1.1' },
-                                { label: "1.2 ชื่อ-นามสกุล (ชื่อเล่น)", value: window.formatValue(data['1.2']), id: '1.2' },
-                                { label: "1.3 ข้อมูลติดต่อ (instagram, ฯลฯ)", value: window.formatValue(data['1.3']), id: '1.3' }
-                            ], 's1', myConf.s1
-                        )}
+                        ${renderDataCard("1", "s1_title", "user", ['1.1', '1.2', '1.3'], 's1', myConf.s1, data)}
+                        ${renderDataCard("2", "s2_title", "book-open", ['2.1', '2.2', '2.3', '2.4'], 's2', myConf.s2, data)}
+                        ${renderDataCard("3", "s3_title", "image", ['3.1', '3.2', '3.3'], 's3', myConf.s3, data)}
 
-                        ${renderDataCard("2", "ข้อมูลวิทยานิพนธ์", "book-open",
-                            [
-                                { label: "2.1 ชื่อวิทยานิพนธ์ (ทั้งภาษาไทย และภาษาอังกฤษ)", value: window.formatValue(data['2.1']), id: '2.1' },
-                                { label: "2.2 ชื่ออาจารย์ที่ปรึกษา", value: window.formatValue(data['2.2']), id: '2.2' },
-                                { label: "2.3 ประเภทของงาน", value: window.formatValue(data['2.3']), id: '2.3' }
-                            ], 's2', myConf.s2
-                        )}
-
-                        ${renderDataCard("3", "ไฟล์ภาพ", "image",
-                            [
-                                { label: "3.1 ไฟล์ภาพหน้าปก และภาพรอง", value: window.formatValue(data['3.1']), id: '3.1' },
-                                { label: "3.2 ไฟล์ภาพถ่ายส่วนตัว", value: window.formatValue(data['3.2']), id: '3.2' },
-                                { label: "3.3 ไฟล์ผลงานทั้งหมด", value: window.formatValue(data['3.3']), id: '3.3' }
-                            ], 's3', myConf.s3
-                        )}
-
-                        <div class="h-20"></div>
+                        <div class="h-16"></div>
                     </main>
                 </div>
                 
-                <div class="fixed bottom-0 left-0 right-0 glass-bottom z-40 pb-6 pt-10 px-4 pointer-events-none">
-                    <div class="max-w-2xl mx-auto flex gap-3 pointer-events-auto">
+                <div class="fixed bottom-0 left-0 right-0 glass-bottom z-40 pb-4 pt-6 px-4 pointer-events-none">
+                    <div class="max-w-2xl mx-auto flex gap-2 sm:gap-3 pointer-events-auto">
                         <a id="student-edit-btn" href="${window.state.settings.editFormUrl || '#'}" target="_blank" onclick="${!window.state.settings.editFormUrl ? "event.preventDefault(); window.uiAlert('แอดมินยังไม่ได้ตั้งค่าลิงก์แก้ไขข้อมูล', 'error');" : ""}" 
-                           class="flex-1 py-4 bg-white text-red-500 font-bold rounded-2xl shadow-xl hover:bg-red-50 active:scale-95 transition-all text-sm uppercase tracking-widest border-2 border-red-100 flex items-center justify-center gap-2">
-                            <i data-lucide="file-edit" size="18"></i> แจ้งแก้ไขข้อมูล
+                           class="flex-1 py-3 bg-white text-red-500 font-bold rounded-xl shadow-xl hover:bg-red-50 active:scale-95 transition-all text-xs uppercase tracking-widest border-2 border-red-100 flex items-center justify-center gap-1.5">
+                            <i data-lucide="file-edit" size="16"></i> แจ้งแก้ไข
                         </a>
                         ${isAllConfirmed ? `
-                            <button id="student-status-btn" onclick="window.uiAlert('คุณได้ยืนยันข้อมูลครบถ้วนทั้ง 3 ส่วนเรียบร้อยแล้ว ขอบคุณครับ', 'success')" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 hover:bg-green-600 active:scale-[0.98] flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-pointer transition-all">
-                                <i data-lucide="check-circle-2" size="18"></i> ยืนยันครบถ้วน
+                            <button id="student-status-btn" onclick="window.uiAlert('คุณได้ยืนยันข้อมูลครบถ้วนทั้ง 3 ส่วนเรียบร้อยแล้ว ขอบคุณครับ', 'success')" class="flex-1 py-3 bg-green-500 text-white font-bold rounded-xl shadow-xl border-b-4 border-green-700 hover:bg-green-600 active:scale-[0.98] flex items-center justify-center gap-1.5 text-xs uppercase tracking-widest cursor-pointer transition-all">
+                                <i data-lucide="check-circle-2" size="16"></i> ยืนยันครบถ้วน
                             </button>
                         ` : `
-                            <div id="student-status-btn" class="flex-1 py-4 bg-slate-200 text-slate-400 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-2 text-[11px] uppercase tracking-widest cursor-not-allowed transition-all">
-                                โปรดยืนยันให้ครบ 3 ส่วน
+                            <div id="student-status-btn" class="flex-1 py-3 bg-slate-200 text-slate-400 font-bold rounded-xl shadow-sm flex items-center justify-center gap-1.5 text-[10px] uppercase tracking-widest cursor-not-allowed transition-all">
+                                ยืนยันให้ครบ 3 ส่วน
                             </div>
                         `}
                     </div>
@@ -768,29 +820,30 @@
             `;
         }
 
-        function renderDataCard(sectionNum, title, icon, fields, stateKey, isConfirmed) {
+        function renderDataCard(sectionNum, titleKey, icon, fieldIds, stateKey, isConfirmed, data) {
+            const labels = window.state.settings.labels;
             return `
-                <div id="card-${stateKey}" class="bg-white p-6 rounded-[2rem] border ${isConfirmed ? 'border-green-400 ring-4 ring-green-50' : 'border-slate-200'} shadow-sm transition-all duration-300">
-                    <div class="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
-                        <div id="icon-box-${stateKey}" class="w-10 h-10 ${isConfirmed ? 'bg-green-100 text-green-600' : 'bg-indigo-50 text-indigo-600'} rounded-xl flex items-center justify-center transition-all">
-                            <i data-lucide="${icon}" size="20"></i>
+                <div id="card-${stateKey}" class="bg-white p-4 md:p-5 rounded-2xl border ${isConfirmed ? 'border-green-400 ring-4 ring-green-50' : 'border-slate-200'} shadow-sm transition-all duration-300">
+                    <div class="flex items-center gap-3 mb-4 pb-3 border-b border-slate-100">
+                        <div id="icon-box-${stateKey}" class="w-8 h-8 ${isConfirmed ? 'bg-green-100 text-green-600' : 'bg-indigo-50 text-indigo-600'} rounded-lg flex items-center justify-center transition-all">
+                            <i data-lucide="${icon}" size="16"></i>
                         </div>
-                        <h2 class="text-lg font-black text-slate-800 tracking-tight">ส่วนที่ ${sectionNum}: ${title}</h2>
+                        <h2 id="lbl-${titleKey.replace('.', '-')}" class="text-base font-black text-slate-800 tracking-tight">ส่วนที่ ${sectionNum}: ${labels[titleKey] || ''}</h2>
                     </div>
                     
-                    <div class="space-y-4 mb-6">
-                        ${fields.map(f => `
-                            <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                                <p class="text-[10px] font-bold text-slate-400 uppercase mb-1 tracking-widest">${f.label}</p>
-                                <p id="val-${f.id.replace('.', '-')}" class="text-sm font-semibold text-slate-800 break-words">${f.value}</p>
+                    <div class="space-y-3 mb-5">
+                        ${fieldIds.map(fid => `
+                            <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                <p id="lbl-${fid.replace('.', '-')}" class="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase mb-1 tracking-widest">${labels[fid] || ''}</p>
+                                <p id="val-${fid.replace('.', '-')}" class="text-[13px] font-semibold text-slate-800 break-words">${window.formatValue(data[fid])}</p>
                             </div>
                         `).join('')}
                     </div>
 
                     <button id="btn-conf-${stateKey}" onclick="window.toggleConfirmation('${stateKey}')" 
-                            class="w-full py-4 rounded-xl font-bold flex items-center justify-center gap-3 transition-all active:scale-[0.98] ${isConfirmed ? 'bg-green-500 text-white shadow-lg shadow-green-200 border-b-4 border-green-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}">
-                        <i data-lucide="${isConfirmed ? 'check-square' : 'square'}" size="20"></i>
-                        <span>${isConfirmed ? 'ยืนยันความถูกต้องแล้ว' : 'คลิกเพื่อยืนยันว่าข้อมูลถูกต้อง'}</span>
+                            class="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${isConfirmed ? 'bg-green-500 text-white shadow-lg shadow-green-200 border-b-4 border-green-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}">
+                        <i data-lucide="${isConfirmed ? 'check-square' : 'square'}" size="18"></i>
+                        <span class="text-sm">${isConfirmed ? 'ยืนยันความถูกต้องแล้ว' : 'คลิกเพื่อยืนยันว่าข้อมูลถูกต้อง'}</span>
                     </button>
                 </div>
             `;
@@ -799,6 +852,7 @@
         function renderAdminView() {
             const students = window.state.sheetData;
             const total = students.length;
+            const labels = window.state.settings.labels;
             
             let confirmedCount = 0;
             const studentStatusList = students.map(s => {
@@ -812,49 +866,86 @@
             return `
                 ${renderHeader('Administrator', 'ระบบจัดการข้อมูล')}
                 <div class="scrollable-content custom-scrollbar">
-                    <main class="max-w-4xl mx-auto px-4 py-6 space-y-6 page-transition text-left">
+                    <main class="max-w-4xl mx-auto px-4 py-5 space-y-5 page-transition text-left">
                         
-                        <div class="grid grid-cols-2 gap-4">
-                            <div class="bg-indigo-600 p-6 rounded-[2rem] text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
-                                <i data-lucide="users" size="80" class="absolute -right-4 -bottom-4 text-white opacity-10"></i>
-                                <p class="text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1">ข้อมูลทั้งหมด</p>
-                                <p id="admin-total-count" class="text-4xl font-black">${total} <span class="text-sm font-normal opacity-80">คน</span></p>
+                        <div class="grid grid-cols-2 gap-3 sm:gap-4">
+                            <div class="bg-indigo-600 p-5 rounded-2xl text-white shadow-lg shadow-indigo-200 relative overflow-hidden">
+                                <i data-lucide="users" size="60" class="absolute -right-3 -bottom-3 text-white opacity-10"></i>
+                                <p class="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1">ข้อมูลทั้งหมด</p>
+                                <p id="admin-total-count" class="text-3xl font-black">${total} <span class="text-xs font-normal opacity-80">คน</span></p>
                             </div>
-                            <div class="bg-green-500 p-6 rounded-[2rem] text-white shadow-xl shadow-green-200 relative overflow-hidden">
-                                <i data-lucide="check-circle" size="80" class="absolute -right-4 -bottom-4 text-white opacity-10"></i>
-                                <p class="text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1">ยืนยันครบแล้ว</p>
-                                <p id="admin-confirmed-count" class="text-4xl font-black">${confirmedCount} <span class="text-sm font-normal opacity-80">คน</span></p>
+                            <div class="bg-green-500 p-5 rounded-2xl text-white shadow-lg shadow-green-200 relative overflow-hidden">
+                                <i data-lucide="check-circle" size="60" class="absolute -right-3 -bottom-3 text-white opacity-10"></i>
+                                <p class="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1">ยืนยันครบแล้ว</p>
+                                <p id="admin-confirmed-count" class="text-3xl font-black">${confirmedCount} <span class="text-xs font-normal opacity-80">คน</span></p>
                             </div>
                         </div>
 
-                        <div class="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
-                            <h2 class="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
-                                <i data-lucide="settings" class="text-indigo-600"></i> ตั้งค่าระบบ
+                        <!-- ส่วนตั้งค่าระบบ และลิงก์ฐานข้อมูล -->
+                        <div class="bg-white p-5 md:p-6 rounded-3xl border border-slate-200 shadow-sm">
+                            <h2 class="text-lg font-black text-slate-800 mb-5 flex items-center gap-2">
+                                <i data-lucide="settings" class="text-indigo-600" size="20"></i> ตั้งค่าระบบและลิงก์ข้อมูล
                             </h2>
-                            <form onsubmit="window.saveAdminSettings(event)" class="space-y-4">
-                                <div>
-                                    <label class="block text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2 ml-1">ลิงก์ Google Form สำหรับให้นักศึกษาแจ้งแก้ไขข้อมูล</label>
-                                    <div class="flex gap-2 flex-col md:flex-row">
-                                        <input id="admin-form-url-input" type="url" name="formUrl" value="${window.state.settings.editFormUrl || ''}" placeholder="https://forms.gle/..." class="flex-1 p-4 rounded-2xl bg-slate-50 border-2 border-slate-100 font-medium text-sm outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-inner" required>
-                                        <button type="submit" class="py-4 px-8 bg-slate-900 text-white font-bold rounded-2xl shadow-lg hover:bg-black active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
-                                            <i data-lucide="save" size="18"></i> บันทึก
-                                        </button>
+                            <form onsubmit="window.saveAdminSettings(event)" class="space-y-5">
+                                
+                                <div class="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                    <h3 class="font-bold text-slate-700 border-b border-slate-200 pb-2 mb-3 text-[13px]">การเชื่อมต่อข้อมูล</h3>
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Sheets (CSV Export URL)</label>
+                                        <input type="url" name="sheetUrl" value="${window.state.settings.sheetUrl || ''}" placeholder="https://docs.google.com/spreadsheets/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner" required>
+                                    </div>
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Form (แจ้งแก้ไขข้อมูล)</label>
+                                        <input type="url" name="formUrl" value="${window.state.settings.editFormUrl || ''}" placeholder="https://forms.gle/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner">
                                     </div>
                                 </div>
+
+                                <div class="space-y-3">
+                                    <h3 class="font-bold text-slate-700 border-b border-slate-200 pb-2 mb-3 text-[13px]">แก้ไขชื่อหัวข้อที่แสดงผล</h3>
+                                    
+                                    <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
+                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1">ส่วนที่ 1</label>
+                                        <input name="lbl_s1_title" value="${labels['s1_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
+                                        <input name="lbl_1_1" value="${labels['1.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_1_2" value="${labels['1.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_1_3" value="${labels['1.3'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                    </div>
+
+                                    <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
+                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1">ส่วนที่ 2</label>
+                                        <input name="lbl_s2_title" value="${labels['s2_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
+                                        <input name="lbl_2_1" value="${labels['2.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_2_2" value="${labels['2.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_2_3" value="${labels['2.3'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_2_4" value="${labels['2.4'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                    </div>
+
+                                    <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
+                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1">ส่วนที่ 3</label>
+                                        <input name="lbl_s3_title" value="${labels['s3_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
+                                        <input name="lbl_3_1" value="${labels['3.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_3_2" value="${labels['3.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_3_3" value="${labels['3.3'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                    </div>
+                                </div>
+
+                                <button type="submit" class="w-full py-3.5 bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:bg-black active:scale-95 transition-all text-sm uppercase tracking-widest flex items-center justify-center gap-2">
+                                    <i data-lucide="save" size="18"></i> บันทึกการตั้งค่าทั้งหมด
+                                </button>
                             </form>
                         </div>
 
-                        <div class="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
-                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-6 gap-4">
-                                <h2 class="text-xl font-black text-slate-800 flex items-center gap-2">
-                                    <i data-lucide="list" class="text-indigo-600"></i> รายชื่อนักศึกษา
+                        <div class="bg-white p-5 md:p-6 rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-5 gap-3">
+                                <h2 class="text-lg font-black text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="list" class="text-indigo-600" size="20"></i> รายชื่อนักศึกษา
                                 </h2>
-                                <div class="flex flex-wrap gap-2">
-                                    <button onclick="window.exportToExcel()" class="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-xl transition-colors text-xs font-bold uppercase tracking-wider border border-emerald-200">
+                                <div class="flex flex-wrap gap-2 w-full sm:w-auto">
+                                    <button onclick="window.exportToExcel()" class="flex-1 sm:flex-none justify-center items-center gap-1.5 px-3 py-2.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-xl transition-colors text-[11px] font-bold uppercase tracking-wider border border-emerald-200 flex">
                                         <i data-lucide="file-spreadsheet" size="16"></i> Excel
                                     </button>
-                                    <button onclick="window.openExportPreview()" class="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-xl transition-colors text-xs font-bold uppercase tracking-wider shadow-md">
-                                        <i data-lucide="printer" size="16"></i> พรีวิว & ส่งออก (PDF/PNG)
+                                    <button onclick="window.openExportPreview()" class="flex-1 sm:flex-none justify-center items-center gap-1.5 px-3 py-2.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded-xl transition-colors text-[11px] font-bold uppercase tracking-wider shadow-md flex">
+                                        <i data-lucide="printer" size="16"></i> ส่งออก (PDF/PNG)
                                     </button>
                                 </div>
                             </div>
@@ -863,33 +954,33 @@
                                 <table class="w-full min-w-[600px] text-left border-collapse">
                                     <thead class="border-b-2 border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
                                         <tr>
-                                            <th class="pb-4 pl-2">รหัส / ชื่อ</th>
-                                            <th class="pb-4 text-center">ส่วนที่ 1</th>
-                                            <th class="pb-4 text-center">ส่วนที่ 2</th>
-                                            <th class="pb-4 text-center">ส่วนที่ 3</th>
-                                            <th class="pb-4 text-right pr-2">สถานะรวม</th>
+                                            <th class="pb-3 pl-2">รหัส / ชื่อ</th>
+                                            <th class="pb-3 text-center">ส่วนที่ 1</th>
+                                            <th class="pb-3 text-center">ส่วนที่ 2</th>
+                                            <th class="pb-3 text-center">ส่วนที่ 3</th>
+                                            <th class="pb-3 text-right pr-2">สถานะรวม</th>
                                         </tr>
                                     </thead>
                                     <tbody id="admin-table-body" class="divide-y divide-slate-50">
                                         ${studentStatusList.map(s => `
                                             <tr class="hover:bg-slate-50/50 transition-colors">
-                                                <td class="py-4 pl-2">
-                                                    <p class="font-black text-slate-800 text-sm">${s['1.1']}</p>
-                                                    <p class="text-[11px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
+                                                <td class="py-3 pl-2">
+                                                    <p class="font-black text-slate-800 text-[13px]">${s['1.1']}</p>
+                                                    <p class="text-[10px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
                                                 </td>
-                                                <td class="py-4 text-center">
-                                                    ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                                                <td class="py-3 text-center">
+                                                    ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
                                                 </td>
-                                                <td class="py-4 text-center">
-                                                    ${s.conf.s2 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                                                <td class="py-3 text-center">
+                                                    ${s.conf.s2 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
                                                 </td>
-                                                <td class="py-4 text-center">
-                                                    ${s.conf.s3 ? '<i data-lucide="check-circle-2" size="20" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="20" class="text-slate-200 mx-auto"></i>'}
+                                                <td class="py-3 text-center">
+                                                    ${s.conf.s3 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
                                                 </td>
-                                                <td class="py-4 text-right pr-2">
+                                                <td class="py-3 text-right pr-2">
                                                     ${s.isAllConfirmed 
-                                                        ? '<span class="inline-flex items-center gap-1 px-3 py-1 bg-green-100 text-green-700 text-[10px] font-bold rounded-full uppercase border border-green-200"><i data-lucide="check" size="12"></i> สมบูรณ์</span>' 
-                                                        : '<span class="inline-flex items-center gap-1 px-3 py-1 bg-orange-50 text-orange-600 text-[10px] font-bold rounded-full uppercase border border-orange-200"><i data-lucide="clock" size="12"></i> รอดำเนินการ</span>'
+                                                        ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-700 text-[9px] font-bold rounded-full uppercase border border-green-200"><i data-lucide="check" size="10"></i> สมบูรณ์</span>' 
+                                                        : '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 text-orange-600 text-[9px] font-bold rounded-full uppercase border border-orange-200"><i data-lucide="clock" size="10"></i> รอดำเนินการ</span>'
                                                     }
                                                 </td>
                                             </tr>
@@ -906,14 +997,14 @@
         function renderUIModal() {
             if (!window.state.modal.show) return "";
             return `
-                <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-6 page-transition">
-                    <div class="bg-white rounded-[2.5rem] p-8 max-w-sm w-full text-center shadow-2xl border border-white">
-                        <div class="w-16 h-16 ${window.state.modal.type === 'error' ? 'bg-red-50 text-red-500' : window.state.modal.type === 'success' ? 'bg-green-50 text-green-500' : 'bg-indigo-50 text-indigo-600'} rounded-3xl flex items-center justify-center mx-auto mb-5 shadow-inner">
-                            <i data-lucide="${window.state.modal.type === 'error' ? 'alert-octagon' : window.state.modal.type === 'success' ? 'check-circle' : 'info'}" size="32"></i>
+                <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-5 page-transition">
+                    <div class="bg-white rounded-[2rem] p-6 max-w-sm w-full text-center shadow-2xl border border-white">
+                        <div class="w-12 h-12 ${window.state.modal.type === 'error' ? 'bg-red-50 text-red-500' : window.state.modal.type === 'success' ? 'bg-green-50 text-green-500' : 'bg-indigo-50 text-indigo-600'} rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner">
+                            <i data-lucide="${window.state.modal.type === 'error' ? 'alert-octagon' : window.state.modal.type === 'success' ? 'check-circle' : 'info'}" size="24"></i>
                         </div>
-                        <h3 class="text-lg font-black text-slate-800 mb-2 leading-tight">${window.state.modal.title}</h3>
-                        <p class="text-sm text-slate-500 font-medium leading-relaxed">${window.state.modal.message}</p>
-                        <button onclick="window.closeModal()" class="w-full mt-6 py-4 bg-slate-900 text-white font-bold rounded-2xl shadow-lg hover:bg-black active:scale-95 transition-all">ตกลง</button>
+                        <h3 class="text-[15px] font-black text-slate-800 mb-2 leading-tight">${window.state.modal.title}</h3>
+                        <p class="text-[13px] text-slate-500 font-medium leading-relaxed">${window.state.modal.message}</p>
+                        <button onclick="window.closeModal()" class="w-full mt-5 py-3 bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:bg-black active:scale-95 transition-all text-sm">ตกลง</button>
                     </div>
                 </div>
             `;
@@ -925,27 +1016,27 @@
                 <div class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm page-transition">
                     <div class="bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden">
                         
-                        <div class="flex justify-between items-center p-5 sm:px-6 border-b border-slate-100 shrink-0">
-                            <h3 class="text-xl font-black text-slate-800 flex items-center gap-2">
-                                <i data-lucide="eye" class="text-indigo-500"></i> พรีวิวข้อมูลก่อนส่งออก
+                        <div class="flex justify-between items-center p-4 sm:px-5 border-b border-slate-100 shrink-0">
+                            <h3 class="text-[15px] font-black text-slate-800 flex items-center gap-2">
+                                <i data-lucide="eye" class="text-indigo-500" size="18"></i> พรีวิวข้อมูลก่อนส่งออก
                             </h3>
-                            <button onclick="window.closeExportPreview()" class="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><i data-lucide="x"></i></button>
+                            <button onclick="window.closeExportPreview()" class="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><i data-lucide="x" size="18"></i></button>
                         </div>
                         
-                        <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 sm:p-8 flex flex-col items-center gap-6 relative">
+                        <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 flex flex-col items-center gap-4 relative">
                             <div id="preview-loading-text" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center text-slate-500">
                                 <div class="w-8 h-8 border-4 border-slate-300 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
-                                <span class="font-bold text-sm tracking-widest uppercase">กำลังสร้างภาพพรีวิว...</span>
+                                <span class="font-bold text-xs tracking-widest uppercase">กำลังสร้างภาพพรีวิว...</span>
                             </div>
-                            <div id="preview-images-container" class="flex flex-col gap-6 w-full items-center">
+                            <div id="preview-images-container" class="flex flex-col gap-4 w-full items-center">
                                 <!-- รูปภาพจะถูกเพิ่มมาที่นี่ -->
                             </div>
                         </div>
 
-                        <div class="p-5 sm:px-6 border-t border-slate-100 bg-slate-50 flex flex-wrap justify-end gap-3 shrink-0">
-                            <button onclick="window.closeExportPreview()" class="px-6 py-3 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold shadow-sm transition-colors hover:bg-slate-100">ปิด</button>
-                            <button onclick="window.downloadFromPreview('image')" class="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-sm transition-all active:scale-95"><i data-lucide="image" size="18"></i> โหลดเป็นรูปภาพ</button>
-                            <button onclick="window.downloadFromPreview('pdf')" class="flex items-center gap-2 px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-sm transition-all active:scale-95"><i data-lucide="file-pdf" size="18"></i> โหลดเป็น PDF</button>
+                        <div class="p-4 sm:px-5 border-t border-slate-100 bg-slate-50 flex flex-wrap justify-end gap-2 shrink-0">
+                            <button onclick="window.closeExportPreview()" class="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-[13px] font-bold shadow-sm transition-colors hover:bg-slate-100">ปิดหน้าต่าง</button>
+                            <button onclick="window.downloadFromPreview('image')" class="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[13px] font-bold shadow-sm transition-all active:scale-95"><i data-lucide="image" size="16"></i> รูปภาพ (PNG)</button>
+                            <button onclick="window.downloadFromPreview('pdf')" class="flex items-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[13px] font-bold shadow-sm transition-all active:scale-95"><i data-lucide="file-pdf" size="16"></i> เอกสาร (PDF)</button>
                         </div>
                     </div>
                 </div>
