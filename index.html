@@ -291,6 +291,7 @@
 
         async function init() {
             try {
+                // พยายามลงชื่อเข้าใช้เบื้องหลัง
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     try { await signInWithCustomToken(auth, __initial_auth_token); } 
                     catch (customTokenError) { await signInAnonymously(auth); }
@@ -304,14 +305,16 @@
                         // เริ่มดึงข้อมูลเบื้องหลัง
                         listenToData();
                         
-                        // สำคัญ: ตรวจสอบเซสชันก่อนจะเปลี่ยนสถานะ isLoading
+                        // ตรวจสอบเซสชัน
                         if (window.state.isRestoringSession) {
                             await tryRestoreSession();
                             window.state.isRestoringSession = false;
                         }
                         
-                        // ระบุว่าตรวจสอบเซสชันเสร็จแล้ว
+                        // สำคัญ: ปลดล็อค isLoading เมื่อ Auth และ Session Check พื้นฐานเสร็จ
                         window.state.isSessionCheckDone = true;
+                        window.state.isLoading = false; 
+                        render(); // สั่งเรนเดอร์ทันทีไม่ต้องรอ Firestore Document
 
                         const pollData = async () => {
                             await fetchSheetData(true); 
@@ -319,6 +322,10 @@
                         };
                         if (window.pollingTimer) clearTimeout(window.pollingTimer);
                         window.pollingTimer = setTimeout(pollData, 1000);
+                    } else {
+                        // ถ้าไม่มี User ให้แสดงหน้า Login
+                        window.state.isLoading = false;
+                        render();
                     }
                 });
             } catch (err) { 
@@ -337,7 +344,6 @@
                     const now = Date.now();
                     const diffMinutes = (now - data.loginTimestamp) / 1000 / 60;
                     
-                    // ใช้ค่า sessionDuration จาก data ถ้ามี หรือใช้ 30 นาทีเป็นค่ามาตรฐาน
                     const limit = data.sessionDuration || window.state.settings.sessionDuration || 30;
                     
                     if (diffMinutes < limit) {
@@ -358,6 +364,7 @@
         function listenToData() {
             if (!window.state.user) return;
             
+            // Listen for settings
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), (s) => {
                 const oldSheetUrl = window.state.settings.sheetUrl;
                 if (s.exists()) {
@@ -372,21 +379,14 @@
                     fetchSheetData(false);
                 }
 
-                // รอให้ทั้งข้อมูลมาถึง และ การตรวจสอบเซสชันเสร็จสิ้น
-                if (window.state.isLoading && window.state.isSessionCheckDone) {
-                    window.state.isLoading = false;
-                    render();
-                } else if (!window.state.isLoading) {
+                if (!window.state.isLoading) {
                     window.softUpdateUI();
                 }
             }, (error) => { 
-                console.error("Snapshot error:", error); 
-                if (window.state.isSessionCheckDone) {
-                    window.state.isLoading = false; 
-                    render(); 
-                }
+                console.error("Settings Snapshot error (อาจจะยังไม่มีไฟล์ config):", error); 
             });
 
+            // Listen for confirmations
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), (s) => {
                 if (s.exists()) {
                     window.state.confirmations = s.data();
@@ -395,17 +395,39 @@
                         window.verifyConfirmationsAgainstData();
                     }
                 }
-            }, (error) => { console.error("Snapshot error:", error); });
+            }, (error) => { console.error("Confirmations Snapshot error:", error); });
         }
 
         // --- OTP Actions ---
         window.requestOtp = async (e) => {
             if (e) e.preventDefault();
             const inputId = document.getElementById('login_id').value.trim();
-            const isAdmin = (inputId === "65030900");
-            const student = window.state.sheetData.find(row => row['1.1'] === inputId);
+            
+            // ตรวจสอบว่าเป็น Admin หรือไม่ (ข้าม OTP ทันที)
+            if (inputId === "65030900") {
+                window.state.isAdmin = true;
+                window.state.studentId = inputId;
+                window.state.view = 'admin';
+                window.state.loginTimestamp = Date.now();
+                window.state.currentStudentData = null;
 
-            if (!isAdmin && !student) {
+                if (window.state.user) {
+                    try {
+                        await setDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'), {
+                            studentId: window.state.studentId,
+                            isAdmin: true,
+                            loginTimestamp: window.state.loginTimestamp,
+                            currentStudentData: null,
+                            sessionDuration: window.state.settings.sessionDuration
+                        });
+                    } catch (err) { console.error("Admin direct login session save failed", err); }
+                }
+                render();
+                return;
+            }
+
+            const student = window.state.sheetData.find(row => row['1.1'] === inputId);
+            if (!student) {
                 return window.uiAlert("ไม่พบข้อมูลรหัสนักศึกษานี้ในระบบ", "error");
             }
 
@@ -430,9 +452,9 @@
 
                 window.state.serverOtp = otp;
                 window.state.refCode = ref;
-                window.state.studentId = inputId; // เก็บค่ารหัสนักศึกษาไว้ไม่ล้างออก
-                window.state.isAdmin = isAdmin;
-                window.state.currentStudentData = student || null;
+                window.state.studentId = inputId; 
+                window.state.isAdmin = false;
+                window.state.currentStudentData = student;
                 window.state.loginStep = 'otp';
                 
                 window.uiAlert(`ส่งรหัส OTP ไปยังอีเมล ${inputId}@kmitl.ac.th เรียบร้อยแล้ว (Ref ID: ${ref})`, "success");
@@ -447,7 +469,7 @@
 
         window.handleOtpInput = (e, index) => {
             const val = e.target.value;
-            e.target.value = val.replace(/[^0-9]/g, ''); // กรองเฉพาะตัวเลข
+            e.target.value = val.replace(/[^0-9]/g, ''); 
             
             if (e.target.value.length === 1 && index < 6) {
                 document.getElementById(`otp-${index + 1}`).focus();
@@ -473,7 +495,6 @@
                 
                 if (window.state.user) {
                     try {
-                        // บันทึกระยะเวลาเซสชันปัจจุบันไปด้วยเพื่อให้ Persistence แม่นยำ
                         await setDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'), {
                             studentId: window.state.studentId,
                             isAdmin: window.state.isAdmin,
@@ -970,7 +991,7 @@
                                             required pattern="[0-9]{8}" title="กรุณากรอกรหัสนักศึกษา 8 หลัก" value="${sId}">
                                     </div>
                                     <button type="submit" ${window.state.otpLoading ? 'disabled' : ''} 
-                                        class="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all text-sm border-b-4 border-indigo-900 flex items-center justify-center gap-2">
+                                        class="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all text-sm border-b-4 border-indigo-900 flex items-center justify-center gap-2 uppercase tracking-widest">
                                         ${window.state.otpLoading ? 
                                             '<div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>' : 
                                             '<span>เข้าสู่ระบบ</span> <i data-lucide="log-in" size="18"></i>'}
@@ -1034,9 +1055,9 @@
                             </div>
                         </div>
 
-                        ${renderDataCard("1", "s1_title", "user", ['1.1', '1.2', '1.3'], 's1', myConf.s1, data)}
-                        ${renderDataCard("2", "s2_title", "book-open", ['2.1', '2.2', '2.3', '2.4'], 's2', myConf.s2, data)}
-                        ${renderDataCard("3", "s3_title", "image", ['3.1', '3.2', '3.3'], 's3', myConf.s3, data)}
+                        ${renderDataCard("1", "s1_title", "user", ['1.1', '1.2', '1.3'], 's1', myConf.s1, data || {})}
+                        ${renderDataCard("2", "s2_title", "book-open", ['2.1', '2.2', '2.3', '2.4'], 's2', myConf.s2, data || {})}
+                        ${renderDataCard("3", "s3_title", "image", ['3.1', '3.2', '3.3'], 's3', myConf.s3, data || {})}
 
                         <div class="h-16"></div>
                     </main>
@@ -1045,7 +1066,7 @@
                 <div class="fixed bottom-0 left-0 right-0 glass-bottom z-40 pb-4 pt-6 px-4 pointer-events-none">
                     <div class="max-w-2xl mx-auto flex gap-2 sm:gap-3 pointer-events-auto">
                         <button onclick="window.openEditGuide()" 
-                           class="flex-1 py-3 bg-white text-red-500 font-bold rounded-xl shadow-xl hover:bg-red-50 active:scale-95 transition-all text-xs uppercase tracking-widest border-2 border-red-100 flex items-center justify-center gap-1.5">
+                            class="flex-1 py-3 bg-white text-red-500 font-bold rounded-xl shadow-xl hover:bg-red-50 active:scale-95 transition-all text-xs uppercase tracking-widest border-2 border-red-100 flex items-center justify-center gap-1.5">
                             <i data-lucide="file-edit" size="16"></i> แจ้งแก้ไข
                         </button>
                         ${isAllConfirmed ? `
