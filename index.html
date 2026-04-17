@@ -49,6 +49,8 @@
             background-color: #f8fafc; 
             margin: 0; 
             padding: 0; 
+            /* ล็อกการซูมจากการ Double Tap */
+            touch-action: manipulation; 
         }
         #app { 
             height: 100vh; 
@@ -100,6 +102,11 @@
             background: #ffffff;
             box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
         }
+
+        /* ป้องกันการซูมใน iOS เมื่อ Font size < 16px */
+        input, select, textarea {
+            font-size: 16px !important;
+        }
     </style>
 </head>
 <body class="text-slate-900">
@@ -123,6 +130,18 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, collection, onSnapshot, setDoc, getDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+        // ป้องกัน Pinch Zoom และ Double Tap Zoom ผ่าน JavaScript เพิ่มเติม
+        document.addEventListener('touchstart', (e) => {
+            if (e.touches.length > 1) e.preventDefault();
+        }, { passive: false });
+        
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', (e) => {
+            const now = (new Date()).getTime();
+            if (now - lastTouchEnd <= 300) e.preventDefault();
+            lastTouchEnd = now;
+        }, false);
 
         // ตั้งค่าเชื่อมต่อฐานข้อมูล Firebase
         const firebaseConfig = {
@@ -1118,7 +1137,7 @@
 
                     <button id="btn-conf-${stateKey}" onclick="window.toggleConfirmation('${stateKey}')" 
                             class="w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${isConfirmed ? 'bg-green-500 text-white shadow-lg shadow-green-200 border-b-4 border-green-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}">
-                        <i data-lucide="${isConfirmed ? 'check-square' : 'square'}" size="18"></i>
+                        <i data-lucide="${isConfirmed ? 'check-square' : 'square'}" size="16"></i>
                         <span class="text-sm">${isConfirmed ? 'ยืนยันความถูกต้องแล้ว' : 'คลิกเพื่อยืนยันว่าข้อมูลถูกต้อง'}</span>
                     </button>
                 </div>
@@ -1174,16 +1193,16 @@
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Sheets (CSV Export URL)</label>
-                                            <input type="url" name="sheetUrl" value="${window.state.settings.sheetUrl || ''}" placeholder="https://docs.google.com/spreadsheets/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner" required>
+                                            <input type="url" name="sheetUrl" value="${window.state.settings.sheetUrl || ''}" placeholder="https://docs.google.com/spreadsheets/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-base outline-none focus:border-indigo-500 shadow-inner" required>
                                         </div>
                                         <div>
                                             <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Form (แจ้งแก้ไขข้อมูล)</label>
-                                            <input type="url" name="formUrl" value="${window.state.settings.editFormUrl || ''}" placeholder="https://forms.gle/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner">
+                                            <input type="url" name="formUrl" value="${window.state.settings.editFormUrl || ''}" placeholder="https://forms.gle/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-base outline-none focus:border-indigo-500 shadow-inner">
                                         </div>
                                     </div>
                                     <div>
                                         <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ระยะเวลาเซสชัน (นาที)</label>
-                                        <input type="number" name="sessionDuration" value="${window.state.settings.sessionDuration || 30}" min="1" max="1440" class="w-full max-w-[200px] p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner">
+                                        <input type="number" name="sessionDuration" value="${window.state.settings.sessionDuration || 30}" min="1" max="1440" class="w-full max-w-[200px] p-3 rounded-lg bg-white border border-slate-200 font-medium text-base outline-none focus:border-indigo-500 shadow-inner">
                                         <p class="text-[9px] text-slate-400 mt-1 italic">* ผู้ใช้จะยังคงอยู่ในระบบแม้รีเฟรชหน้าเว็บ หากยังไม่ครบกำหนดเวลา</p>
                                     </div>
                                 </div>
@@ -1193,27 +1212,27 @@
                                     
                                     <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
                                         <label class="block text-[11px] font-bold text-indigo-600 mb-1 uppercase tracking-wider">ส่วนที่ 1</label>
-                                        <input name="lbl_s1_title" value="${labels['s1_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
-                                        <input name="lbl_1_1" value="${labels['1.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
-                                        <input name="lbl_1_2" value="${labels['1.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
-                                        <input name="lbl_1_3" value="${labels['1.3'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_s1_title" value="${labels['s1_title'] || ''}" class="w-full p-2.5 rounded-lg text-base font-bold border border-slate-200 outline-none focus:border-indigo-500">
+                                        <input name="lbl_1_1" value="${labels['1.1'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_1_2" value="${labels['1.2'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_1_3" value="${labels['1.3'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
                                     </div>
 
                                     <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
                                         <label class="block text-[11px] font-bold text-indigo-600 mb-1 uppercase tracking-wider">ส่วนที่ 2</label>
-                                        <input name="lbl_s2_title" value="${labels['s2_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
-                                        <input name="lbl_2_1" value="${labels['2.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
-                                        <input name="lbl_2_2" value="${labels['2.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
-                                        <input name="lbl_2_3" value="${labels['2.3'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
-                                        <input name="lbl_2_4" value="${labels['2.4'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_s2_title" value="${labels['s2_title'] || ''}" class="w-full p-2.5 rounded-lg text-base font-bold border border-slate-200 outline-none focus:border-indigo-500">
+                                        <input name="lbl_2_1" value="${labels['2.1'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_2_2" value="${labels['2.2'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_2_3" value="${labels['2.3'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_2_4" value="${labels['2.4'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
                                     </div>
 
                                     <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
                                         <label class="block text-[11px] font-bold text-indigo-600 mb-1 uppercase tracking-wider">ส่วนที่ 3</label>
-                                        <input name="lbl_s3_title" value="${labels['s3_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
-                                        <input name="lbl_3_1" value="${labels['3.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
-                                        <input name="lbl_3_2" value="${labels['3.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
-                                        <input name="lbl_3_3" value="${labels['3.3'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_s3_title" value="${labels['s3_title'] || ''}" class="w-full p-2.5 rounded-lg text-base font-bold border border-slate-200 outline-none focus:border-indigo-500">
+                                        <input name="lbl_3_1" value="${labels['3.1'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_3_2" value="${labels['3.2'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
+                                        <input name="lbl_3_3" value="${labels['3.3'] || ''}" class="w-full p-2.5 rounded-lg text-base border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
                                     </div>
                                 </div>
 
