@@ -11,6 +11,12 @@
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Prompt:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     
+    <!-- Export Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- เปลี่ยนมาใช้ html-to-image และ jsPDF ตามที่ระบุ -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
     <script>
         tailwind.config = {
             theme: {
@@ -69,6 +75,9 @@
         .glass-bottom {
             background: linear-gradient(to top, rgba(248,250,252,1) 60%, rgba(248,250,252,0) 100%);
         }
+
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
     </style>
 </head>
 <body class="text-slate-900">
@@ -80,8 +89,11 @@
         </div>
     </div>
     
-    <!-- เพิ่มคอนเทนเนอร์สำหรับ Modal เพื่อแยกออกจาก app ไม่ให้เวลากดบันทึกแล้วจอกระตุก -->
     <div id="modal-container"></div>
+    <div id="preview-modal-container"></div>
+
+    <!-- Hidden Renderer (สำหรับเรนเดอร์รูปภาพโดยไม่ให้หน้าเว็บเพี้ยน) -->
+    <div id="offscreenRenderer" style="position: fixed; top: 0; left: -3000vw; z-index: -9999; pointer-events: none; opacity: 0;"></div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -105,27 +117,40 @@
         const analytics = getAnalytics(app);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = 'thesis-check-app'; // ชื่อ Folder หลักในการเก็บข้อมูล
+        const appId = 'thesis-check-app';
 
-        // Google Sheet CSV Export URL (แปลงจาก pubhtml เป็น output=csv เพื่อให้อ่านข้อมูลง่าย)
+        // Google Sheet CSV Export URL
         const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRyI-a9eEarynPfuWWbpTqHvz-vDHBGnE1UnvqvDOGIAA9nWybOkfS2jlI3xJRrpFAuR5nmWup9169/pub?gid=1223023440&single=true&output=csv";
 
         window.state = {
-            view: 'login', // login, student, admin
+            view: 'login', 
             user: null,
             studentId: '',
             isAdmin: false,
             sheetData: [],
             currentStudentData: null,
-            settings: {
-                editFormUrl: "" // Admin ตั้งค่าลิงก์ Google Form
-            },
-            confirmations: {}, // { "65030298": { section1: true, section2: true, section3: true } }
+            settings: { editFormUrl: "" },
+            confirmations: {}, 
             isLoading: true,
-            modal: { show: false, title: '', message: '', type: 'info' }
+            modal: { show: false, title: '', message: '', type: 'info' },
+            showPreviewModal: false // สถานะโชว์หน้าต่างพรีวิว
         };
 
-        // --- CSV Parser (Handle quotes and commas inside cells) ---
+        window.cachedExportDataURLs = []; // สำหรับเก็บข้อมูลภาพที่จะส่งออก
+
+        // ฟังก์ชันสำหรับแปลงข้อความที่มีลิงก์ ให้สามารถคลิกได้
+        window.formatValue = (text) => {
+            if (!text || text.trim() === '') return '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>';
+            let safeText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            safeText = safeText.replace(urlRegex, function(url) {
+                return `<a href="${url}" target="_blank" class="text-indigo-500 underline hover:text-indigo-700 break-all font-medium inline-flex items-center gap-1"><i data-lucide="external-link" class="w-3 h-3"></i> ${url}</a>`;
+            });
+            safeText = safeText.replace(/\n/g, '<br>');
+            return safeText;
+        };
+
+        // --- CSV Parser ---
         function parseCSV(str) {
             const arr = [];
             let quote = false;
@@ -146,12 +171,10 @@
         }
 
         // --- Data Fetching ---
-        // เพิ่ม parameter isBackgroundPoll เพื่อซ่อน Error ในคอนโซลเวลา Google แบนการรีเฟรชถี่ๆ
         async function fetchSheetData(isBackgroundPoll = false) {
             try {
                 const fetchUrl = SHEET_CSV_URL + "&t=" + new Date().getTime();
                 const response = await fetch(fetchUrl);
-                
                 if (!response.ok) throw new Error("HTTP Status " + response.status);
                 const csvText = await response.text();
                 const parsed = parseCSV(csvText);
@@ -159,44 +182,41 @@
                 if (parsed.length > 0) {
                     const headers = parsed[0];
                     const dataRows = parsed.slice(1);
-                    
-                    // Map headers to row data dynamically based on column titles (1.1, 1.2, etc.)
+                    const prefixes = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '3.1', '3.2', '3.3'];
+                    const headerMap = {};
+                    prefixes.forEach(p => headerMap[p] = []);
+
+                    headers.forEach((header, index) => {
+                        prefixes.forEach(p => { if (header.includes(p)) headerMap[p].push(index); });
+                    });
+
                     const newData = dataRows.map(row => {
                         let obj = {};
-                        headers.forEach((header, index) => {
-                            // Find the key from header (e.g., "1.1 รหัสนักศึกษา" -> extract "1.1")
-                            let keyMatch = header.match(/^(\d+\.\d+)/);
-                            if (keyMatch) {
-                                obj[keyMatch[1]] = row[index] ? row[index].trim() : '-';
-                            }
-                            // Also keep original header just in case
-                            obj[header] = row[index] ? row[index].trim() : '-';
+                        prefixes.forEach(p => {
+                            let values = headerMap[p].map(idx => row[idx] ? row[idx].trim() : '').filter(v => v !== '');
+                            obj[p] = values.join('\n\n'); 
                         });
                         return obj;
-                    }).filter(row => row['1.1'] && row['1.1'] !== '-'); // Filter out empty rows
+                    }).filter(row => row['1.1'] && row['1.1'] !== '');
 
-                    // อัปเดตข้อมูลเข้าสู่ State ทันที
-                    window.state.sheetData = newData;
+                    const isDataChanged = JSON.stringify(window.state.sheetData) !== JSON.stringify(newData);
 
-                    // ถ้ากำลังดูหน้านักศึกษาอยู่ ให้อัปเดตข้อมูลของคนนั้นให้เป็นล่าสุดด้วย
-                    if (window.state.view === 'student' && window.state.studentId) {
-                        window.state.currentStudentData = window.state.sheetData.find(row => row['1.1'] === window.state.studentId) || window.state.currentStudentData;
+                    if (isDataChanged && newData.length > 0) {
+                        window.state.sheetData = newData;
+                        if (window.state.view === 'student' && window.state.studentId) {
+                            window.state.currentStudentData = window.state.sheetData.find(row => row['1.1'] === window.state.studentId) || window.state.currentStudentData;
+                        }
+                        if (!window.state.isLoading) window.softUpdateUI();
                     }
-
-                    // สั่งอัปเดตหน้าจอแบบไม่กระตุกทุกๆ 3 วิ (Soft Update)
-                    if (!window.state.isLoading) window.softUpdateUI();
                 }
             } catch (error) {
-                // ซ่อน Error ใน Console หากเป็นการดึงข้อมูลพื้นหลัง (ป้องกัน Console รกเวลา Google ลิมิตการดึงข้อมูล)
                 if (!isBackgroundPoll) {
                     console.error("Error fetching sheet:", error);
-                    // Fallback Mock Data if CORS fails in strict environment
                     window.state.sheetData = [
-                        { "1.1": "65030001", "1.2": "นายใจดี เรียนเก่ง", "1.3": "IG: jaidee_th", "2.1": "การศึกษาผลกระทบของ AI (Study of AI Impacts)", "2.2": "ผศ.ดร.สมชาย ใจมั่น", "2.3": "วิจัยเชิงทดลอง", "3.1": "cover.jpg, sub.jpg", "3.2": "profile.png", "3.3": "Drive Link" },
-                        { "1.1": "65030002", "1.2": "นางสาวสมหญิง สวยงาม", "1.3": "Line: somying_s", "2.1": "การออกแบบ UI สำหรับผู้สูงอายุ (UI Design for Elderly)", "2.2": "อ.มานะ อุตสาหะ", "2.3": "ออกแบบและการสร้าง", "3.1": "cover2.jpg", "3.2": "photo.jpg", "3.3": "Drive Link 2" }
+                        { "1.1": "65030001", "1.2": "นายใจดี เรียนเก่ง (ดี)", "1.3": "IG: jaidee_th\nhttps://instagram.com", "2.1": "การศึกษา AI (Study of AI)", "2.2": "ผศ.ดร.สมชาย ใจมั่น", "2.3": "วิจัยเชิงทดลอง", "3.1": "https://drive.google.com/drive/1", "3.2": "https://drive.google.com/drive/2", "3.3": "https://drive.google.com/drive/3" }
                     ];
                     if(window.state.isLoading) {
-                        window.uiAlert("เนื่องจากข้อจำกัดด้านความปลอดภัยของเบราว์เซอร์ กำลังแสดงข้อมูลจำลองเพื่อการทดสอบ", "info");
+                        window.uiAlert("เกิดข้อผิดพลาดในการโหลดข้อมูลจริง กำลังแสดงข้อมูลจำลองเพื่อการทดสอบ", "info");
                     }
                 }
             }
@@ -205,14 +225,9 @@
         // --- Firebase Initialization & Listening ---
         async function init() {
             try {
-                // Mandatory Rule 3: Auth Before Queries + Fallback for Custom Config
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    try {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } catch (customTokenError) {
-                        console.warn("Custom token mismatch (normal when using custom Firebase config). Falling back to anonymous login.");
-                        await signInAnonymously(auth);
-                    }
+                    try { await signInWithCustomToken(auth, __initial_auth_token); } 
+                    catch (customTokenError) { await signInAnonymously(auth); }
                 } else {
                     await signInAnonymously(auth);
                 }
@@ -220,16 +235,13 @@
                 onAuthStateChanged(auth, async (u) => {
                     window.state.user = u;
                     if (u) {
-                        await fetchSheetData(false); // First load (not background)
+                        await fetchSheetData(false); 
                         listenToData();
 
-                        // เปลี่ยนจาก setInterval เป็น setTimeout แบบ Recursive 
-                        // เพื่อป้องกันการเรียก Fetch ซ้อนทับกันเวลาอินเทอร์เน็ตช้า
                         const pollData = async () => {
-                            await fetchSheetData(true); // true = Background Poll (ซ่อน Error)
+                            await fetchSheetData(true); 
                             window.pollingTimer = setTimeout(pollData, 3000);
                         };
-                        
                         if (window.pollingTimer) clearTimeout(window.pollingTimer);
                         window.pollingTimer = setTimeout(pollData, 3000);
                     }
@@ -243,45 +255,31 @@
 
         function listenToData() {
             if (!window.state.user) return;
-            
-            // Listen to Admin Settings (Google Form Link)
-            onSnapshot(
-                doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), 
-                (s) => {
-                    if (s.exists()) window.state.settings = { ...window.state.settings, ...s.data() };
-                    
-                    if (window.state.isLoading) {
-                        window.state.isLoading = false;
-                        render();
-                    } else {
-                        window.softUpdateUI();
-                    }
-                },
-                (error) => { console.error("Snapshot error:", error); window.state.isLoading = false; render(); }
-            );
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), (s) => {
+                if (s.exists()) window.state.settings = { ...window.state.settings, ...s.data() };
+                if (window.state.isLoading) {
+                    window.state.isLoading = false;
+                    render();
+                } else {
+                    window.softUpdateUI();
+                }
+            }, (error) => { console.error("Snapshot error:", error); window.state.isLoading = false; render(); });
 
-            // Listen to Student Confirmations
-            onSnapshot(
-                doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), 
-                (s) => {
-                    if (s.exists()) window.state.confirmations = s.data();
-                    if (!window.state.isLoading) window.softUpdateUI();
-                },
-                (error) => { console.error("Snapshot error:", error); }
-            );
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), (s) => {
+                if (s.exists()) window.state.confirmations = s.data();
+                if (!window.state.isLoading) window.softUpdateUI();
+            }, (error) => { console.error("Snapshot error:", error); });
         }
 
         // --- Actions ---
         window.handleLogin = (e) => {
             e.preventDefault();
             const input = document.getElementById('login_id').value.trim();
-            
             if (input === "65030900") {
                 window.state.isAdmin = true;
                 window.state.studentId = "ADMIN";
                 window.state.view = 'admin';
             } else {
-                // เช็คว่ามีรหัสนักศึกษานี้ใน Sheet หรือไม่
                 const student = window.state.sheetData.find(row => row['1.1'] === input);
                 if (student) {
                     window.state.isAdmin = false;
@@ -306,18 +304,12 @@
         window.toggleConfirmation = async (section) => {
             if (!window.state.user) return;
             const sid = window.state.studentId;
-            
-            // Optimistic update
             let currentData = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
             let updatedData = { ...currentData, [section]: !currentData[section] };
-            
             let newConfirmations = { ...window.state.confirmations, [sid]: updatedData };
             window.state.confirmations = newConfirmations;
-            
-            // อัปเดต UI แบบนุ่มนวลแทนการเรนเดอร์ใหม่ทั้งหมด
             window.softUpdateUI();
 
-            // Save to Firebase (using setDoc with merge to not overwrite other students)
             try {
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system', 'confirmations'), newConfirmations, { merge: true });
             } catch (err) {
@@ -326,19 +318,18 @@
             }
         };
 
-        // --- ฟังก์ชันอัปเดตเฉพาะส่วน (ป้องกันเว็บกระตุก/รีเฟรช) ---
         window.softUpdateUI = () => {
             if (window.state.view === 'student' && window.state.currentStudentData) {
                 const data = window.state.currentStudentData;
-                
-                // 1. อัปเดต Text Fields
                 const fields = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '3.1', '3.2', '3.3'];
                 fields.forEach(id => {
                     const el = document.getElementById(`val-${id.replace('.', '-')}`);
-                    if (el) el.innerHTML = data[id] || '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>';
+                    if (el) {
+                        el.innerHTML = window.formatValue(data[id]);
+                        lucide.createIcons({root: el});
+                    }
                 });
 
-                // 2. อัปเดตสถานะปุ่มยืนยัน
                 const sid = window.state.studentId;
                 const myConf = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
                 const isAllConfirmed = myConf.s1 && myConf.s2 && myConf.s3;
@@ -356,18 +347,16 @@
                     }
                 });
 
-                // 3. อัปเดตลิงก์ Edit Form
                 const editBtn = document.getElementById('student-edit-btn');
                 if (editBtn) {
                     editBtn.href = window.state.settings.editFormUrl || '#';
                     editBtn.onclick = window.state.settings.editFormUrl ? null : (e) => { e.preventDefault(); window.uiAlert('แอดมินยังไม่ได้ตั้งค่าลิงก์แก้ไขข้อมูล', 'error'); };
                 }
 
-                // 4. อัปเดตปุ่มสถานะด้านล่าง
                 const bottomBar = document.getElementById('student-status-btn');
                 if (bottomBar) {
                     if (isAllConfirmed) {
-                        bottomBar.outerHTML = `<div id="student-status-btn" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-default transition-all"><i data-lucide="check-circle-2" size="18"></i> ยืนยันครบถ้วน</div>`;
+                        bottomBar.outerHTML = `<button id="student-status-btn" onclick="window.uiAlert('คุณได้ยืนยันข้อมูลครบถ้วนทั้ง 3 ส่วนเรียบร้อยแล้ว ขอบคุณครับ', 'success')" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 hover:bg-green-600 active:scale-[0.98] flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-pointer transition-all"><i data-lucide="check-circle-2" size="18"></i> ยืนยันครบถ้วน</button>`;
                     } else {
                         bottomBar.outerHTML = `<div id="student-status-btn" class="flex-1 py-4 bg-slate-200 text-slate-400 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-2 text-[11px] uppercase tracking-widest cursor-not-allowed transition-all">โปรดยืนยันให้ครบ 3 ส่วน</div>`;
                     }
@@ -429,12 +418,203 @@
         window.saveAdminSettings = async (e) => {
             e.preventDefault();
             const url = e.target.formUrl.value.trim();
-            
             try {
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), { editFormUrl: url }, { merge: true });
                 window.uiAlert("บันทึกลิงก์ Google Form เรียบร้อยแล้ว", "success");
             } catch (err) {
                 window.uiAlert("เกิดข้อผิดพลาดในการบันทึก", "error");
+            }
+        };
+
+        // --- Export Functions ---
+        window.exportToExcel = () => {
+            const students = window.state.sheetData;
+            if(!students || students.length === 0) return window.uiAlert("ไม่มีข้อมูลให้ส่งออก", "error");
+            
+            const exportData = students.map(s => {
+                const sid = s['1.1'];
+                const conf = window.state.confirmations[sid] || {};
+                const isAllConfirmed = conf.s1 && conf.s2 && conf.s3;
+                return {
+                    'รหัสนักศึกษา': s['1.1'],
+                    'ชื่อ-นามสกุล': s['1.2'],
+                    'ส่วนที่ 1 (ส่วนตัว)': conf.s1 ? 'ยืนยันแล้ว' : 'รอดำเนินการ',
+                    'ส่วนที่ 2 (วิทยานิพนธ์)': conf.s2 ? 'ยืนยันแล้ว' : 'รอดำเนินการ',
+                    'ส่วนที่ 3 (ไฟล์ภาพ)': conf.s3 ? 'ยืนยันแล้ว' : 'รอดำเนินการ',
+                    'สถานะรวม': isAllConfirmed ? 'สมบูรณ์' : 'รอดำเนินการ'
+                };
+            });
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Students Status");
+            XLSX.writeFile(wb, "ThesisCheck_Data.xlsx");
+        };
+
+        // สร้าง HTML แนวตั้ง (A4 Portrait = 794x1123 px) สำหรับถ่ายภาพ
+        const generateExportPagesHTML = () => {
+            const students = window.state.sheetData;
+            const confirmations = window.state.confirmations;
+            const rowsPerPage = 20; // ปรับเพิ่มจำนวนแถวต่อหน้าเนื่องจากเป็นแนวตั้ง
+            const pagesHtml = [];
+            const totalPages = Math.ceil(students.length / rowsPerPage) || 1;
+            const timestamp = new Date().toLocaleString('th-TH');
+
+            for (let i = 0; i < totalPages; i++) {
+                const chunk = students.slice(i * rowsPerPage, (i + 1) * rowsPerPage);
+                
+                const rowsHtml = chunk.map(s => {
+                    const sid = s['1.1'];
+                    const conf = confirmations[sid] || {};
+                    const isAllConfirmed = conf.s1 && conf.s2 && conf.s3;
+                    
+                    const getStatusHtml = (status) => status ? 
+                        `<span style="color: #16a34a; font-weight: bold; font-size: 13px;">✔</span>` : 
+                        `<span style="color: #cbd5e1; font-weight: bold; font-size: 13px;">-</span>`;
+
+                    const getOverallStatusHtml = (status) => status ?
+                        `<span style="background: #dcfce7; color: #166534; padding: 4px 10px; border-radius: 999px; font-weight: bold; font-size: 9px;">สมบูรณ์</span>` :
+                        `<span style="background: #ffedd5; color: #9a3412; padding: 4px 10px; border-radius: 999px; font-weight: bold; font-size: 9px;">รอดำเนินการ</span>`;
+
+                    return `
+                        <tr style="border-bottom: 1px solid #f1f5f9;">
+                            <td style="padding: 12px 10px; font-size: 13px; color: #1e293b;">
+                                <div style="font-weight: 800;">${s['1.1']}</div>
+                                <div style="font-size: 10px; color: #64748b;">${s['1.2']}</div>
+                            </td>
+                            <td style="padding: 12px 6px; text-align: center;">${getStatusHtml(conf.s1)}</td>
+                            <td style="padding: 12px 6px; text-align: center;">${getStatusHtml(conf.s2)}</td>
+                            <td style="padding: 12px 6px; text-align: center;">${getStatusHtml(conf.s3)}</td>
+                            <td style="padding: 12px 10px; text-align: right;">${getOverallStatusHtml(isAllConfirmed)}</td>
+                        </tr>
+                    `;
+                }).join('');
+
+                const pageHtml = `
+                    <div id="capture-layout-wrapper-${i}" style="width: 794px; height: 1123px; background-color: #ffffff; padding: 40px 50px; font-family: 'Prompt', sans-serif; display: flex; flex-direction: column; box-sizing: border-box;">
+                        <style>
+                            @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;600;800&display=swap');
+                            * { font-family: 'Prompt', sans-serif !important; }
+                        </style>
+                        
+                        <!-- Header -->
+                        <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 4px solid #4f46e5; padding-bottom: 15px; margin-bottom: 25px;">
+                            <div>
+                                <h1 style="margin: 0; font-size: 30px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: -0.5px;">ThesisCheck</h1>
+                                <p style="margin: 4px 0 0 0; font-size: 13px; color: #64748b; font-weight: 600;">รายงานสถานะการตรวจสอบข้อมูลนักศึกษา</p>
+                            </div>
+                            <div style="text-align: right;">
+                                <p style="margin: 0; font-size: 14px; font-weight: 800; color: #0f172a;">หน้า ${i + 1} / ${totalPages}</p>
+                                <p style="margin: 4px 0 0 0; font-size: 10px; color: #94a3b8; font-weight: 600;">ข้อมูลล่าสุด: ${timestamp}</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Table Content -->
+                        <div style="flex: 1; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background: #fff;">
+                            <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                                <thead>
+                                    <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0;">
+                                        <th style="padding: 14px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">รหัส / ชื่อ-นามสกุล</th>
+                                        <th style="padding: 14px 6px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">ส่วนที่ 1</th>
+                                        <th style="padding: 14px 6px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">ส่วนที่ 2</th>
+                                        <th style="padding: 14px 6px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: center; letter-spacing: 0.5px;">ส่วนที่ 3</th>
+                                        <th style="padding: 14px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: right; letter-spacing: 0.5px;">สถานะรวม</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${rowsHtml || '<tr><td colspan="5" style="text-align:center; padding:20px; color:#94a3b8;">ไม่มีข้อมูลนักศึกษา</td></tr>'}
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- Footer -->
+                        <div style="text-align: center; font-size: 10px; color: #cbd5e1; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-top: 25px;">
+                            Generated by ThesisCheck System
+                        </div>
+                    </div>
+                `;
+                pagesHtml.push(pageHtml);
+            }
+            return pagesHtml;
+        };
+
+        window.openExportPreview = async () => {
+            const students = window.state.sheetData;
+            if(!students || students.length === 0) return window.uiAlert("ไม่มีข้อมูลให้ส่งออก", "error");
+
+            window.state.showPreviewModal = true;
+            window.updatePreviewModalUI();
+            
+            const previewContainer = document.getElementById('preview-images-container');
+            const loadingText = document.getElementById('preview-loading-text');
+            if(previewContainer) previewContainer.innerHTML = ''; 
+            if(loadingText) loadingText.classList.remove('hidden');
+            
+            window.cachedExportDataURLs = [];
+            
+            try {
+                await document.fonts.ready;
+                const pagesHtml = generateExportPagesHTML();
+                const renderer = document.getElementById('offscreenRenderer');
+                
+                for (let i = 0; i < pagesHtml.length; i++) {
+                    renderer.innerHTML = pagesHtml[i];
+                    const wrap = renderer.querySelector(`[id^="capture-layout-wrapper"]`);
+                    void wrap.offsetWidth; 
+                    
+                    // รอให้ฟอนต์หรือสไตล์ปรับตัว
+                    await new Promise(r => setTimeout(r, 500)); 
+                    
+                    const dataUrl = await htmlToImage.toPng(wrap, {
+                        quality: 1, pixelRatio: 2, cacheBust: true, useCORS: true, backgroundColor: '#ffffff',
+                        filter: (node) => {
+                            if (node.tagName === 'LINK' || node.tagName === 'STYLE') {
+                                try { if (node.sheet && node.sheet.cssRules) return true; } catch (e) { return false; }
+                            }
+                            return true;
+                        }
+                    });
+                    
+                    window.cachedExportDataURLs.push(dataUrl);
+                    
+                    const img = document.createElement('img');
+                    img.src = dataUrl;
+                    img.className = "max-w-full h-auto rounded-xl shadow-lg border border-slate-200 fade-in";
+                    if(previewContainer) previewContainer.appendChild(img);
+                }
+            } catch (e) { 
+                console.error(e);
+                window.uiAlert("การพรีวิวล้มเหลว: " + e.message, "error"); 
+            } finally { 
+                if(loadingText) loadingText.classList.add('hidden');
+            }
+        };
+
+        window.closeExportPreview = () => {
+            window.state.showPreviewModal = false;
+            window.updatePreviewModalUI();
+        };
+
+        window.downloadFromPreview = (type) => {
+            if (!window.cachedExportDataURLs.length) return;
+            const dateStr = new Date().toISOString().split('T')[0];
+            const baseName = `ThesisCheck_Report_${dateStr}`;
+            
+            if (type === 'image') {
+                window.cachedExportDataURLs.forEach((url, idx) => {
+                    const a = document.createElement('a'); 
+                    a.download = `${baseName}_Page${idx+1}.png`; 
+                    a.href = url; 
+                    a.click();
+                });
+            } else {
+                // สร้าง PDF แนวตั้ง (Portrait) ขนาด A4
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'px', [794, 1123]);
+                window.cachedExportDataURLs.forEach((url, idx) => {
+                    if (idx > 0) pdf.addPage([794, 1123], 'p');
+                    pdf.addImage(url, 'PNG', 0, 0, 794, 1123);
+                });
+                pdf.save(`${baseName}.pdf`);
             }
         };
 
@@ -455,6 +635,14 @@
             }
         };
 
+        window.updatePreviewModalUI = () => {
+            const container = document.getElementById('preview-modal-container');
+            if (container) {
+                container.innerHTML = renderPreviewModal();
+                lucide.createIcons();
+            }
+        };
+
         // --- Render Functions ---
         function renderHeader(title, subtitle) {
             return `
@@ -463,7 +651,6 @@
                         <div class="flex items-center gap-3">
                             <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200 relative">
                                 <i data-lucide="file-check-2" size="20"></i>
-                                <!-- จุดสีเขียวแสดงสถานะ Auto-Update ทุก 3 วิ -->
                                 <span class="absolute -top-1 -right-1 w-3 h-3 bg-green-400 border-2 border-white rounded-full animate-ping"></span>
                                 <span class="absolute -top-1 -right-1 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></span>
                             </div>
@@ -487,7 +674,6 @@
         function renderLogin() {
             return `
                 <div class="h-[100dvh] w-full flex flex-col items-center justify-center p-6 bg-slate-50 relative overflow-hidden">
-                    <!-- Background blobs -->
                     <div class="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow"></div>
                     <div class="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-blue-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow" style="animation-delay: 1s;"></div>
                     
@@ -517,15 +703,12 @@
             const data = window.state.currentStudentData;
             const sid = window.state.studentId;
             const myConf = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
-            
             const isAllConfirmed = myConf.s1 && myConf.s2 && myConf.s3;
 
             return `
                 ${renderHeader('ตรวจสอบข้อมูล', `ID: ${sid}`)}
                 <div class="scrollable-content custom-scrollbar">
                     <main class="max-w-2xl mx-auto px-4 py-6 space-y-6 page-transition relative">
-                        
-                        <!-- Warning Banner -->
                         <div class="bg-orange-50 border-2 border-orange-200 rounded-[2rem] p-6 shadow-sm flex items-start gap-4">
                             <div class="w-12 h-12 bg-orange-100 text-orange-500 rounded-2xl flex items-center justify-center flex-shrink-0"><i data-lucide="alert-triangle" size="24"></i></div>
                             <div>
@@ -537,44 +720,34 @@
                             </div>
                         </div>
 
-                        <!-- Section 1: ข้อมูลส่วนตัว -->
-                        ${renderDataCard(
-                            "1", "ข้อมูลส่วนตัวทั้งหมด", "user",
+                        ${renderDataCard("1", "ข้อมูลส่วนตัวทั้งหมด", "user",
                             [
-                                { label: "1.1 รหัสนักศึกษา", value: data['1.1'], id: '1.1' },
-                                { label: "1.2 ชื่อ-นามสกุล", value: data['1.2'], id: '1.2' },
-                                { label: "1.3 ข้อมูลติดต่อ", value: data['1.3'], id: '1.3' }
-                            ],
-                            's1', myConf.s1
+                                { label: "1.1 รหัสนักศึกษา 8 หลัก", value: window.formatValue(data['1.1']), id: '1.1' },
+                                { label: "1.2 ชื่อ-นามสกุล (ชื่อเล่น)", value: window.formatValue(data['1.2']), id: '1.2' },
+                                { label: "1.3 ข้อมูลติดต่อ (instagram, ฯลฯ)", value: window.formatValue(data['1.3']), id: '1.3' }
+                            ], 's1', myConf.s1
                         )}
 
-                        <!-- Section 2: ข้อมูลวิทยานิพนธ์ -->
-                        ${renderDataCard(
-                            "2", "ข้อมูลวิทยานิพนธ์", "book-open",
+                        ${renderDataCard("2", "ข้อมูลวิทยานิพนธ์", "book-open",
                             [
-                                { label: "2.1 ชื่อวิทยานิพนธ์", value: data['2.1'], id: '2.1' },
-                                { label: "2.2 ชื่ออาจารย์ที่ปรึกษา", value: data['2.2'], id: '2.2' },
-                                { label: "2.3 ประเภทของงาน", value: data['2.3'], id: '2.3' }
-                            ],
-                            's2', myConf.s2
+                                { label: "2.1 ชื่อวิทยานิพนธ์ (ทั้งภาษาไทย และภาษาอังกฤษ)", value: window.formatValue(data['2.1']), id: '2.1' },
+                                { label: "2.2 ชื่ออาจารย์ที่ปรึกษา", value: window.formatValue(data['2.2']), id: '2.2' },
+                                { label: "2.3 ประเภทของงาน", value: window.formatValue(data['2.3']), id: '2.3' }
+                            ], 's2', myConf.s2
                         )}
 
-                        <!-- Section 3: ไฟล์ภาพ -->
-                        ${renderDataCard(
-                            "3", "ไฟล์ภาพและผลงาน", "image",
+                        ${renderDataCard("3", "ไฟล์ภาพ", "image",
                             [
-                                { label: "3.1 ไฟล์ภาพหน้าปก และภาพรอง", value: data['3.1'], id: '3.1' },
-                                { label: "3.2 ไฟล์ภาพถ่ายส่วนตัว", value: data['3.2'], id: '3.2' },
-                                { label: "3.3 ไฟล์ผลงานทั้งหมด", value: data['3.3'], id: '3.3' }
-                            ],
-                            's3', myConf.s3
+                                { label: "3.1 ไฟล์ภาพหน้าปก และภาพรอง", value: window.formatValue(data['3.1']), id: '3.1' },
+                                { label: "3.2 ไฟล์ภาพถ่ายส่วนตัว", value: window.formatValue(data['3.2']), id: '3.2' },
+                                { label: "3.3 ไฟล์ผลงานทั้งหมด", value: window.formatValue(data['3.3']), id: '3.3' }
+                            ], 's3', myConf.s3
                         )}
 
-                        <div class="h-20"></div> <!-- Spacer for sticky button -->
+                        <div class="h-20"></div>
                     </main>
                 </div>
                 
-                <!-- Sticky Actions -->
                 <div class="fixed bottom-0 left-0 right-0 glass-bottom z-40 pb-6 pt-10 px-4 pointer-events-none">
                     <div class="max-w-2xl mx-auto flex gap-3 pointer-events-auto">
                         <a id="student-edit-btn" href="${window.state.settings.editFormUrl || '#'}" target="_blank" onclick="${!window.state.settings.editFormUrl ? "event.preventDefault(); window.uiAlert('แอดมินยังไม่ได้ตั้งค่าลิงก์แก้ไขข้อมูล', 'error');" : ""}" 
@@ -582,9 +755,9 @@
                             <i data-lucide="file-edit" size="18"></i> แจ้งแก้ไขข้อมูล
                         </a>
                         ${isAllConfirmed ? `
-                            <div id="student-status-btn" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-default transition-all">
+                            <button id="student-status-btn" onclick="window.uiAlert('คุณได้ยืนยันข้อมูลครบถ้วนทั้ง 3 ส่วนเรียบร้อยแล้ว ขอบคุณครับ', 'success')" class="flex-1 py-4 bg-green-500 text-white font-bold rounded-2xl shadow-xl border-b-4 border-green-700 hover:bg-green-600 active:scale-[0.98] flex items-center justify-center gap-2 text-sm uppercase tracking-widest cursor-pointer transition-all">
                                 <i data-lucide="check-circle-2" size="18"></i> ยืนยันครบถ้วน
-                            </div>
+                            </button>
                         ` : `
                             <div id="student-status-btn" class="flex-1 py-4 bg-slate-200 text-slate-400 font-bold rounded-2xl shadow-sm flex items-center justify-center gap-2 text-[11px] uppercase tracking-widest cursor-not-allowed transition-all">
                                 โปรดยืนยันให้ครบ 3 ส่วน
@@ -609,7 +782,7 @@
                         ${fields.map(f => `
                             <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                                 <p class="text-[10px] font-bold text-slate-400 uppercase mb-1 tracking-widest">${f.label}</p>
-                                <p id="val-${f.id.replace('.', '-')}" class="text-sm font-semibold text-slate-800 break-words">${f.value || '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>'}</p>
+                                <p id="val-${f.id.replace('.', '-')}" class="text-sm font-semibold text-slate-800 break-words">${f.value}</p>
                             </div>
                         `).join('')}
                     </div>
@@ -627,7 +800,6 @@
             const students = window.state.sheetData;
             const total = students.length;
             
-            // Calculate Confirmed Stats
             let confirmedCount = 0;
             const studentStatusList = students.map(s => {
                 const sid = s['1.1'];
@@ -642,7 +814,6 @@
                 <div class="scrollable-content custom-scrollbar">
                     <main class="max-w-4xl mx-auto px-4 py-6 space-y-6 page-transition text-left">
                         
-                        <!-- Dashboard Stats -->
                         <div class="grid grid-cols-2 gap-4">
                             <div class="bg-indigo-600 p-6 rounded-[2rem] text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
                                 <i data-lucide="users" size="80" class="absolute -right-4 -bottom-4 text-white opacity-10"></i>
@@ -656,7 +827,6 @@
                             </div>
                         </div>
 
-                        <!-- Admin Settings -->
                         <div class="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-200 shadow-sm">
                             <h2 class="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
                                 <i data-lucide="settings" class="text-indigo-600"></i> ตั้งค่าระบบ
@@ -674,15 +844,22 @@
                             </form>
                         </div>
 
-                        <!-- Student List -->
                         <div class="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-200 shadow-sm overflow-hidden">
-                            <div class="flex justify-between items-end mb-6">
+                            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-6 gap-4">
                                 <h2 class="text-xl font-black text-slate-800 flex items-center gap-2">
                                     <i data-lucide="list" class="text-indigo-600"></i> รายชื่อนักศึกษา
                                 </h2>
+                                <div class="flex flex-wrap gap-2">
+                                    <button onclick="window.exportToExcel()" class="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-xl transition-colors text-xs font-bold uppercase tracking-wider border border-emerald-200">
+                                        <i data-lucide="file-spreadsheet" size="16"></i> Excel
+                                    </button>
+                                    <button onclick="window.openExportPreview()" class="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-xl transition-colors text-xs font-bold uppercase tracking-wider shadow-md">
+                                        <i data-lucide="printer" size="16"></i> พรีวิว & ส่งออก (PDF/PNG)
+                                    </button>
+                                </div>
                             </div>
                             
-                            <div class="overflow-x-auto custom-scrollbar">
+                            <div id="export-table-container" class="overflow-x-auto custom-scrollbar p-1 -mx-1">
                                 <table class="w-full min-w-[600px] text-left border-collapse">
                                     <thead class="border-b-2 border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
                                         <tr>
@@ -742,10 +919,42 @@
             `;
         }
 
+        function renderPreviewModal() {
+            if (!window.state.showPreviewModal) return "";
+            return `
+                <div class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm page-transition">
+                    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden">
+                        
+                        <div class="flex justify-between items-center p-5 sm:px-6 border-b border-slate-100 shrink-0">
+                            <h3 class="text-xl font-black text-slate-800 flex items-center gap-2">
+                                <i data-lucide="eye" class="text-indigo-500"></i> พรีวิวข้อมูลก่อนส่งออก
+                            </h3>
+                            <button onclick="window.closeExportPreview()" class="p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><i data-lucide="x"></i></button>
+                        </div>
+                        
+                        <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 sm:p-8 flex flex-col items-center gap-6 relative">
+                            <div id="preview-loading-text" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center text-slate-500">
+                                <div class="w-8 h-8 border-4 border-slate-300 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
+                                <span class="font-bold text-sm tracking-widest uppercase">กำลังสร้างภาพพรีวิว...</span>
+                            </div>
+                            <div id="preview-images-container" class="flex flex-col gap-6 w-full items-center">
+                                <!-- รูปภาพจะถูกเพิ่มมาที่นี่ -->
+                            </div>
+                        </div>
+
+                        <div class="p-5 sm:px-6 border-t border-slate-100 bg-slate-50 flex flex-wrap justify-end gap-3 shrink-0">
+                            <button onclick="window.closeExportPreview()" class="px-6 py-3 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold shadow-sm transition-colors hover:bg-slate-100">ปิด</button>
+                            <button onclick="window.downloadFromPreview('image')" class="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-sm transition-all active:scale-95"><i data-lucide="image" size="18"></i> โหลดเป็นรูปภาพ</button>
+                            <button onclick="window.downloadFromPreview('pdf')" class="flex items-center gap-2 px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-sm transition-all active:scale-95"><i data-lucide="file-pdf" size="18"></i> โหลดเป็น PDF</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function render() {
             const app = document.getElementById('app');
-            
-            if (window.state.isLoading) return; // Keep showing loader html defined in body initially
+            if (window.state.isLoading) return;
 
             let mainContent = '';
             if (window.state.view === 'login') {
@@ -758,10 +967,10 @@
 
             app.innerHTML = mainContent;
             window.updateModalUI();
+            window.updatePreviewModalUI();
             lucide.createIcons();
         }
 
-        // Start App
         init();
 
     </script>
