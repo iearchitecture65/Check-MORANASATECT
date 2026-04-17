@@ -831,8 +831,13 @@
                     
                     await new Promise(r => setTimeout(r, 500)); 
                     
+                    // ปรับ pixelRatio และ quality เพื่อลดขนาดรูปต้นทาง (ช่วยลดขนาด PDF)
                     const dataUrl = await htmlToImage.toPng(wrap, {
-                        quality: 1, pixelRatio: 2, cacheBust: true, useCORS: true, backgroundColor: '#ffffff',
+                        quality: 0.85, 
+                        pixelRatio: 1.5, 
+                        cacheBust: true, 
+                        useCORS: true, 
+                        backgroundColor: '#ffffff',
                         filter: (node) => {
                             if (node.tagName === 'LINK' || node.tagName === 'STYLE') {
                                 try { if (node.sheet && node.sheet.cssRules) return true; } catch (e) { return false; }
@@ -875,10 +880,18 @@
                 });
             } else {
                 const { jsPDF } = window.jspdf;
-                const pdf = new jsPDF('p', 'px', [794, 1123]);
+                // เพิ่มการบีบอัดไฟล์ PDF ในระดับ FAST
+                const pdf = new jsPDF({
+                    orientation: 'p',
+                    unit: 'px',
+                    format: [794, 1123],
+                    compress: true 
+                });
+                
                 window.cachedExportDataURLs.forEach((url, idx) => {
                     if (idx > 0) pdf.addPage([794, 1123], 'p');
-                    pdf.addImage(url, 'PNG', 0, 0, 794, 1123);
+                    // ใส่รูปภาพพร้อมกำหนดการบีบอัดเป็น 'FAST'
+                    pdf.addImage(url, 'PNG', 0, 0, 794, 1123, undefined, 'FAST');
                 });
                 pdf.save(`${baseName}.pdf`);
             }
@@ -1350,19 +1363,23 @@
                             <button onclick="window.closeExportPreview()" class="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><i data-lucide="x" size="18"></i></button>
                         </div>
                         
-                        <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 flex flex-col items-center gap-4 relative">
-                            <div id="preview-loading-text" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center text-slate-500">
-                                <div class="w-8 h-8 border-4 border-slate-300 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
-                                <span class="font-bold text-xs tracking-widest uppercase">กำลังสร้างภาพรายงาน...</span>
+                        <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 flex flex-col items-center relative min-h-[400px]">
+                            <!-- ปรับแก้ Loading ให้ขยายเต็มพื้นที่และไม่ถูกปุ่มบัง -->
+                            <div id="preview-loading-text" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 z-10 bg-slate-100/50 backdrop-blur-[2px]">
+                                <div class="w-10 h-10 border-4 border-slate-300 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
+                                <span class="font-bold text-[11px] tracking-widest uppercase text-slate-600">ระบบกำลังประมวลผลและบีบอัดข้อมูล...</span>
+                                <p class="text-[9px] text-slate-400 mt-2 italic">โปรดรอสักครู่ ขั้นตอนนี้อาจใช้เวลา 3-5 วินาที</p>
                             </div>
-                            <div id="preview-images-container" class="flex flex-col gap-4 w-full items-center">
+                            
+                            <div id="preview-images-container" class="flex flex-col gap-6 w-full items-center py-4">
+                                <!-- รูปพรีวิวจะปรากฏที่นี่ -->
                             </div>
                         </div>
 
-                        <div class="p-4 sm:px-5 border-t border-slate-100 bg-slate-50 flex flex-wrap justify-end gap-2 shrink-0">
-                            <button onclick="window.closeExportPreview()" class="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-[13px] font-bold shadow-sm transition-colors hover:bg-slate-100 uppercase">ปิด</button>
-                            <button onclick="window.downloadFromPreview('image')" class="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[13px] font-bold shadow-sm transition-all active:scale-95"><i data-lucide="image" size="16"></i> รูปภาพ (PNG)</button>
-                            <button onclick="window.downloadFromPreview('pdf')" class="flex items-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[13px] font-bold shadow-sm transition-all active:scale-95"><i data-lucide="file-pdf" size="16"></i> เอกสาร (PDF)</button>
+                        <div class="p-4 sm:px-5 border-t border-slate-100 bg-white flex flex-wrap justify-end gap-2 shrink-0 z-20">
+                            <button onclick="window.closeExportPreview()" class="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-lg text-[11px] font-black shadow-sm transition-colors hover:bg-slate-200 uppercase tracking-wider">ยกเลิก</button>
+                            <button onclick="window.downloadFromPreview('image')" class="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-black shadow-md transition-all active:scale-95 uppercase tracking-wider"><i data-lucide="image" size="14"></i> บันทึกรูปภาพ</button>
+                            <button onclick="window.downloadFromPreview('pdf')" class="flex items-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-black shadow-md transition-all active:scale-95 uppercase tracking-wider"><i data-lucide="file-pdf" size="14"></i> บันทึก PDF (บีบอัด)</button>
                         </div>
                     </div>
                 </div>
