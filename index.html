@@ -20,6 +20,9 @@
         tailwind.config = {
             theme: {
                 extend: {
+                    colors: {
+                        kmitl: '#ff6600',
+                    },
                     fontFamily: { sans: ['Inter', 'Prompt', 'sans-serif'] },
                     animation: {
                         'fade-in-up': 'fadeInUp 0.4s ease-out forwards',
@@ -77,6 +80,26 @@
 
         .fade-in { animation: fadeIn 0.3s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+        /* OTP Input Field Styling */
+        .otp-box {
+            width: 42px;
+            height: 54px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 24px;
+            font-weight: 800;
+            background: #f8fafc;
+            color: #1e293b;
+            transition: all 0.2s;
+            outline: none;
+        }
+        .otp-box:focus {
+            border-color: #4f46e5;
+            background: #ffffff;
+            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
+        }
     </style>
 </head>
 <body class="text-slate-900">
@@ -98,10 +121,10 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, collection, onSnapshot, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, collection, onSnapshot, setDoc, getDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
 
-        // ตั้งค่าเชื่อมต่อฐานข้อมูล Firebase ของคุณ
+        // ตั้งค่าเชื่อมต่อฐานข้อมูล Firebase
         const firebaseConfig = {
             apiKey: "AIzaSyD1z-AufMcsNqnbm3uUjoniuhdmDksYHMY",
             authDomain: "moranasatect.firebaseapp.com",
@@ -112,13 +135,12 @@
             measurementId: "G-WY21FBFBPB"
         };
 
-        // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
         const appId = 'thesis-check-app';
+        const OTP_API_URL = "https://script.google.com/macros/s/AKfycbwiwh09ssDzXk_XBA_UtVq-JqsaZt6rEGh3sCmfLaHCB_GZTy0umsf9vribur54EpaW/exec";
 
-        // การตั้งค่าเริ่มต้น
         const DEFAULT_LABELS = {
             "s1_title": "ข้อมูลส่วนตัวทั้งหมด",
             "1.1": "1.1 รหัสนักศึกษา 8 หลัก",
@@ -147,26 +169,30 @@
             settings: { 
                 editFormUrl: "",
                 sheetUrl: DEFAULT_SHEET_URL,
-                sessionDuration: 30, // ค่าเริ่มต้น 30 นาที
+                sessionDuration: 30,
                 labels: { ...DEFAULT_LABELS }
             },
             confirmations: {}, 
             isLoading: true,
+            isRestoringSession: true,
             loginTimestamp: null,
             modal: { show: false, title: '', message: '', type: 'info' },
             showPreviewModal: false,
             showEditGuideModal: false,
-            adminSettingsExpanded: false 
+            adminSettingsExpanded: false,
+            // OTP State
+            loginStep: 'id', // 'id' or 'otp'
+            serverOtp: '',
+            refCode: '',
+            otpLoading: false
         };
 
         window.cachedExportDataURLs = []; 
 
-        // ฟังก์ชันตรวจสอบเซสชัน
         window.checkSessionStatus = () => {
             if (window.state.view !== 'login' && window.state.loginTimestamp) {
                 const now = Date.now();
                 const diffMinutes = (now - window.state.loginTimestamp) / 1000 / 60;
-                
                 if (diffMinutes >= (window.state.settings.sessionDuration || 30)) {
                     window.logout();
                     window.uiAlert("เซสชันหมดอายุเนื่องจากใช้งานครบเวลาที่กำหนด โปรดเข้าสู่ระบบใหม่อีกครั้ง", "info");
@@ -174,10 +200,8 @@
             }
         };
 
-        // ตรวจสอบทุกๆ 10 วินาที
         setInterval(() => window.checkSessionStatus(), 10000);
 
-        // ฟังก์ชันสำหรับแปลงข้อความที่มีลิงก์ ให้สามารถคลิกได้
         window.formatValue = (text) => {
             if (!text || text.trim() === '') return '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>';
             let safeText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -189,7 +213,6 @@
             return safeText;
         };
 
-        // --- CSV Parser ---
         function parseCSV(str) {
             const arr = [];
             let quote = false;
@@ -209,7 +232,6 @@
             return arr;
         }
 
-        // --- Data Fetching ---
         async function fetchSheetData(isBackgroundPoll = false) {
             try {
                 const fetchUrl = (window.state.settings.sheetUrl || DEFAULT_SHEET_URL) + "&t=" + new Date().getTime();
@@ -250,7 +272,7 @@
 
                     if (isDataChanged && newData.length > 0) {
                         window.state.sheetData = newData;
-                        if (window.state.view === 'student' && window.state.studentId) {
+                        if (window.state.studentId) {
                             window.state.currentStudentData = window.state.sheetData.find(row => row['1.1'] === window.state.studentId) || window.state.currentStudentData;
                         }
                         if (!window.state.isLoading) {
@@ -266,7 +288,6 @@
             }
         }
 
-        // --- Firebase Initialization & Listening ---
         async function init() {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -280,7 +301,10 @@
                     window.state.user = u;
                     if (u) {
                         listenToData();
-
+                        if (window.state.isRestoringSession) {
+                            await tryRestoreSession();
+                            window.state.isRestoringSession = false;
+                        }
                         const pollData = async () => {
                             await fetchSheetData(true); 
                             window.pollingTimer = setTimeout(pollData, 5000);
@@ -293,6 +317,29 @@
                 console.error("Firebase Auth Error:", err);
                 window.state.isLoading = false;
                 render();
+            }
+        }
+
+        async function tryRestoreSession() {
+            if (!window.state.user) return;
+            try {
+                const sessionDoc = await getDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'));
+                if (sessionDoc.exists()) {
+                    const data = sessionDoc.data();
+                    const now = Date.now();
+                    const diffMinutes = (now - data.loginTimestamp) / 1000 / 60;
+                    if (diffMinutes < (window.state.settings.sessionDuration || 30)) {
+                        window.state.studentId = data.studentId;
+                        window.state.isAdmin = data.isAdmin;
+                        window.state.currentStudentData = data.currentStudentData;
+                        window.state.loginTimestamp = data.loginTimestamp;
+                        window.state.view = data.isAdmin ? 'admin' : 'student';
+                    } else {
+                        await deleteDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'));
+                    }
+                }
+            } catch (e) {
+                console.error("Restore session error", e);
             }
         }
 
@@ -333,32 +380,115 @@
         }
 
         // --- Actions ---
-        window.handleLogin = (e) => {
-            e.preventDefault();
-            const input = document.getElementById('login_id').value.trim();
-            if (input === "65030900") {
-                window.state.isAdmin = true;
-                window.state.studentId = "ADMIN";
-                window.state.view = 'admin';
-                window.state.adminSettingsExpanded = false; 
-                window.state.loginTimestamp = Date.now();
-            } else {
-                const student = window.state.sheetData.find(row => row['1.1'] === input);
-                if (student) {
-                    window.state.isAdmin = false;
-                    window.state.studentId = input;
-                    window.state.currentStudentData = student;
-                    window.state.view = 'student';
-                    window.state.loginTimestamp = Date.now();
-                } else {
-                    return window.uiAlert("ไม่พบข้อมูลรหัสนักศึกษานี้ในระบบ", "error");
-                }
+        window.requestOtp = async (e) => {
+            if (e) e.preventDefault();
+            const inputId = document.getElementById('login_id').value.trim();
+            const isAdmin = (inputId === "65030900");
+            const student = window.state.sheetData.find(row => row['1.1'] === inputId);
+
+            if (!isAdmin && !student) {
+                return window.uiAlert("ไม่พบข้อมูลรหัสนักศึกษานี้ในระบบ", "error");
             }
+
+            window.state.otpLoading = true;
+            render();
+
+            try {
+                const otp = Math.floor(100000 + Math.random() * 900000).toString();
+                const ref = Math.random().toString(36).substring(2, 6).toUpperCase();
+
+                // Call Google Apps Script API
+                await fetch(OTP_API_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        studentId: inputId,
+                        otpCode: otp,
+                        refCode: ref
+                    })
+                });
+
+                // Set state for OTP step
+                window.state.serverOtp = otp;
+                window.state.refCode = ref;
+                window.state.studentId = inputId;
+                window.state.isAdmin = isAdmin;
+                window.state.currentStudentData = student || null;
+                window.state.loginStep = 'otp';
+                
+                window.uiAlert(`ส่งรหัส OTP ไปยังอีเมล ${inputId}@kmitl.ac.th เรียบร้อยแล้ว (Ref ID: ${ref})`, "success");
+            } catch (err) {
+                console.error("OTP Error:", err);
+                window.uiAlert("เกิดข้อผิดพลาดในการส่ง OTP โปรดตรวจสอบการเชื่อมต่ออินเทอร์เน็ต", "error");
+            } finally {
+                window.state.otpLoading = false;
+                render();
+            }
+        };
+
+        window.handleOtpInput = (e, index) => {
+            const val = e.target.value;
+            // กรองเฉพาะตัวเลข
+            e.target.value = val.replace(/[^0-9]/g, '');
+            
+            // Auto focus next
+            if (e.target.value.length === 1 && index < 6) {
+                document.getElementById(`otp-${index + 1}`).focus();
+            }
+        };
+
+        window.handleOtpKeyDown = (e, index) => {
+            // Handle Backspace
+            if (e.key === 'Backspace' && !e.target.value && index > 1) {
+                document.getElementById(`otp-${index - 1}`).focus();
+            }
+        };
+
+        window.handleVerifyOtp = async (e) => {
+            e.preventDefault();
+            let inputOtp = "";
+            for(let i=1; i<=6; i++) {
+                inputOtp += document.getElementById(`otp-${i}`).value;
+            }
+
+            if (inputOtp === window.state.serverOtp) {
+                window.state.loginTimestamp = Date.now();
+                window.state.view = window.state.isAdmin ? 'admin' : 'student';
+                
+                // บันทึกเซสชันลง Firestore
+                if (window.state.user) {
+                    try {
+                        await setDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'), {
+                            studentId: window.state.studentId,
+                            isAdmin: window.state.isAdmin,
+                            loginTimestamp: window.state.loginTimestamp,
+                            currentStudentData: window.state.currentStudentData
+                        });
+                    } catch (err) { console.error("Save session failed", err); }
+                }
+                render();
+            } else {
+                window.uiAlert("รหัส OTP ไม่ถูกต้อง โปรดตรวจสอบอีกครั้ง", "error");
+            }
+        };
+
+        window.backToLogin = () => {
+            window.state.loginStep = 'id';
             render();
         };
 
-        window.logout = () => {
+        window.logout = async () => {
+            if (window.state.user) {
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'));
+                } catch (err) {
+                    console.error("Delete session failed", err);
+                }
+            }
+
             window.state.view = 'login';
+            window.state.loginStep = 'id';
             window.state.studentId = '';
             window.state.isAdmin = false;
             window.state.currentStudentData = null;
@@ -783,7 +913,7 @@
                                 <h1 class="font-black text-[13px] text-slate-800 uppercase tracking-tight">${title}</h1>
                                 <p class="text-[8px] font-bold text-indigo-600 uppercase tracking-widest mt-1 flex items-center gap-1">
                                     ${subtitle}
-                                    <span class="text-[7px] text-green-600 bg-green-50 px-1 py-0.5 rounded border border-green-200">Auto</span>
+                                    <span class="text-[7px] text-green-600 bg-green-50 px-1 py-0.5 rounded border border-green-200 uppercase">Auto</span>
                                 </p>
                             </div>
                         </div>
@@ -797,29 +927,72 @@
         }
 
         function renderLogin() {
+            const isOtpStep = window.state.loginStep === 'otp';
+            const sId = window.state.studentId || '';
+
             return `
                 <div class="h-[100dvh] w-full flex flex-col items-center justify-center p-4 bg-slate-50 relative overflow-hidden">
                     <div class="absolute top-[-10%] left-[-10%] w-72 h-72 bg-indigo-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow"></div>
                     <div class="absolute bottom-[-10%] right-[-10%] w-72 h-72 bg-blue-200/40 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-pulse-slow" style="animation-delay: 1s;"></div>
                     
-                    <div class="max-w-sm w-full bg-white rounded-3xl p-8 shadow-2xl border border-white text-center page-transition relative z-10">
+                    <div class="max-w-sm w-full bg-white rounded-[2.5rem] p-8 shadow-2xl border border-white text-center page-transition relative z-10">
                         <div class="w-16 h-16 bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-2xl flex items-center justify-center text-white mx-auto mb-6 shadow-xl shadow-indigo-200">
-                            <i data-lucide="shield-check" size="32"></i>
+                            <i data-lucide="${isOtpStep ? 'mail' : 'shield-check'}" size="32"></i>
                         </div>
                         <h1 class="text-2xl font-black text-slate-800 mb-1 tracking-tight">ThesisCheck</h1>
-                        <p class="text-slate-400 text-[10px] font-bold uppercase mt-1 tracking-widest opacity-80">ระบบตรวจสอบข้อมูลวิทยานิพนธ์</p>
+                        <p class="text-slate-400 text-[10px] font-bold uppercase mt-1 tracking-widest opacity-80">
+                            ${isOtpStep ? 'ยืนยันรหัส OTP จากเมลสถาบัน' : 'ระบบตรวจสอบข้อมูลวิทยานิพนธ์'}
+                        </p>
                         
-                        <form onsubmit="window.handleLogin(event)" class="mt-8 space-y-4">
-                            <div class="relative">
-                                <i data-lucide="user" class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size="18"></i>
-                                <input id="login_id" type="text" placeholder="รหัสนักศึกษา 8 หลัก" class="w-full p-3.5 pl-11 rounded-xl bg-slate-50 border-2 border-slate-100 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white shadow-inner transition-all" required pattern="[0-9]{8}" title="กรุณากรอกรหัสนักศึกษา 8 หลัก">
-                            </div>
-                            <button type="submit" class="w-full py-3.5 bg-indigo-600 text-white font-bold rounded-xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all text-sm border-b-4 border-indigo-900 flex items-center justify-center gap-2">
-                                <span>เข้าสู่ระบบ</span>
-                                <i data-lucide="arrow-right" size="16"></i>
-                            </button>
-                        </form>
+                        <div class="mt-8">
+                            ${!isOtpStep ? `
+                                <form onsubmit="window.requestOtp(event)" class="space-y-4">
+                                    <div class="relative">
+                                        <i data-lucide="user" class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size="18"></i>
+                                        <input id="login_id" type="tel" inputmode="numeric" placeholder="รหัสนักศึกษา 8 หลัก" 
+                                            class="w-full p-3.5 pl-11 rounded-xl bg-slate-50 border-2 border-slate-100 font-bold text-base outline-none focus:border-indigo-500 focus:bg-white shadow-inner transition-all" 
+                                            required pattern="[0-9]{8}" title="กรุณากรอกรหัสนักศึกษา 8 หลัก" value="${sId}">
+                                    </div>
+                                    <button type="submit" ${window.state.otpLoading ? 'disabled' : ''} 
+                                        class="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-xl hover:bg-indigo-700 active:scale-95 transition-all text-sm border-b-4 border-indigo-900 flex items-center justify-center gap-2">
+                                        ${window.state.otpLoading ? 
+                                            '<div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>' : 
+                                            '<span>เข้าสู่ระบบ</span> <i data-lucide="log-in" size="18"></i>'}
+                                    </button>
+                                </form>
+                            ` : `
+                                <form onsubmit="window.handleVerifyOtp(event)" class="space-y-6">
+                                    <div class="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-left">
+                                        <div class="flex justify-between items-start">
+                                            <div>
+                                                <p class="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-1">ส่งรหัสไปที่</p>
+                                                <p class="text-xs font-bold text-slate-700">${sId}@kmitl.ac.th</p>
+                                            </div>
+                                            <div class="bg-indigo-200/50 px-2 py-1 rounded text-[9px] font-black text-indigo-700">REF: ${window.state.refCode}</div>
+                                        </div>
+                                    </div>
+
+                                    <div class="flex justify-center gap-2" id="otp-container">
+                                        <input type="tel" id="otp-1" maxlength="1" inputmode="numeric" class="otp-box" oninput="window.handleOtpInput(event, 1)" onkeydown="window.handleOtpKeyDown(event, 1)" autofocus>
+                                        <input type="tel" id="otp-2" maxlength="1" inputmode="numeric" class="otp-box" oninput="window.handleOtpInput(event, 2)" onkeydown="window.handleOtpKeyDown(event, 2)">
+                                        <input type="tel" id="otp-3" maxlength="1" inputmode="numeric" class="otp-box" oninput="window.handleOtpInput(event, 3)" onkeydown="window.handleOtpKeyDown(event, 3)">
+                                        <input type="tel" id="otp-4" maxlength="1" inputmode="numeric" class="otp-box" oninput="window.handleOtpInput(event, 4)" onkeydown="window.handleOtpKeyDown(event, 4)">
+                                        <input type="tel" id="otp-5" maxlength="1" inputmode="numeric" class="otp-box" oninput="window.handleOtpInput(event, 5)" onkeydown="window.handleOtpKeyDown(event, 5)">
+                                        <input type="tel" id="otp-6" maxlength="1" inputmode="numeric" class="otp-box" oninput="window.handleOtpInput(event, 6)" onkeydown="window.handleOtpKeyDown(event, 6)">
+                                    </div>
+
+                                    <div class="space-y-3">
+                                        <button type="submit" class="w-full py-4 bg-kmitl text-white font-bold rounded-xl shadow-xl hover:opacity-90 active:scale-95 transition-all text-sm border-b-4 border-orange-800 flex items-center justify-center gap-2">
+                                            <span>ยืนยัน</span>
+                                            <i data-lucide="check-circle" size="18"></i>
+                                        </button>
+                                        <button type="button" onclick="window.backToLogin()" class="text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors py-2 block mx-auto">แก้ไขรหัสนักศึกษา</button>
+                                    </div>
+                                </form>
+                            `}
+                        </div>
                     </div>
+                    <p class="absolute bottom-8 text-[10px] font-bold text-slate-300 uppercase tracking-[0.2em] z-10">MORANASATECT &copy; 2026 DIGITAL ASSET</p>
                 </div>
             `;
         }
@@ -961,7 +1134,7 @@
                                     <div>
                                         <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ระยะเวลาเซสชัน (นาที)</label>
                                         <input type="number" name="sessionDuration" value="${window.state.settings.sessionDuration || 30}" min="1" max="1440" class="w-full max-w-[200px] p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner">
-                                        <p class="text-[9px] text-slate-400 mt-1 italic">* ผู้ใช้จะถูกออกจากระบบอัตโนมัติเมื่อครบเวลาที่กำหนดหลังเข้าสู่ระบบ</p>
+                                        <p class="text-[9px] text-slate-400 mt-1 italic">* ผู้ใช้จะยังคงอยู่ในระบบแม้รีเฟรชหน้าเว็บ หากยังไม่ครบกำหนดเวลา</p>
                                     </div>
                                 </div>
 
@@ -969,7 +1142,7 @@
                                     <h3 class="font-bold text-slate-700 border-b border-slate-200 pb-2 mb-3 text-[13px]">แก้ไขชื่อหัวข้อที่แสดงผล</h3>
                                     
                                     <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
-                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1">ส่วนที่ 1</label>
+                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1 uppercase tracking-wider">ส่วนที่ 1</label>
                                         <input name="lbl_s1_title" value="${labels['s1_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
                                         <input name="lbl_1_1" value="${labels['1.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
                                         <input name="lbl_1_2" value="${labels['1.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
@@ -977,7 +1150,7 @@
                                     </div>
 
                                     <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
-                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1">ส่วนที่ 2</label>
+                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1 uppercase tracking-wider">ส่วนที่ 2</label>
                                         <input name="lbl_s2_title" value="${labels['s2_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
                                         <input name="lbl_2_1" value="${labels['2.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
                                         <input name="lbl_2_2" value="${labels['2.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
@@ -986,7 +1159,7 @@
                                     </div>
 
                                     <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-2">
-                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1">ส่วนที่ 3</label>
+                                        <label class="block text-[11px] font-bold text-indigo-600 mb-1 uppercase tracking-wider">ส่วนที่ 3</label>
                                         <input name="lbl_s3_title" value="${labels['s3_title'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] font-bold border border-slate-200 outline-none focus:border-indigo-500">
                                         <input name="lbl_3_1" value="${labels['3.1'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
                                         <input name="lbl_3_2" value="${labels['3.2'] || ''}" class="w-full p-2.5 rounded-lg text-[13px] border border-slate-200 outline-none focus:border-indigo-500 text-slate-600">
@@ -1045,8 +1218,8 @@
                                                 </td>
                                                 <td class="py-3 text-right pr-2">
                                                     ${s.isAllConfirmed 
-                                                        ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-700 text-[9px] font-bold rounded-full uppercase border border-green-200"><i data-lucide="check" size="10"></i> สมบูรณ์</span>' 
-                                                        : '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 text-orange-600 text-[9px] font-bold rounded-full uppercase border border-orange-200"><i data-lucide="clock" size="10"></i> รอดำเนินการ</span>'
+                                                        ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-700 text-[9px] font-bold rounded-full uppercase border border-green-200">สมบูรณ์</span>' 
+                                                        : '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 text-orange-600 text-[9px] font-bold rounded-full uppercase border border-orange-200">รอดำเนินการ</span>'
                                                     }
                                                 </td>
                                             </tr>
@@ -1078,9 +1251,8 @@
 
         function renderEditGuideModal() {
             if (!window.state.showEditGuideModal) return "";
-            
             const rawEmail = window.state.currentStudentData?.email;
-            const emailDisplay = (rawEmail && rawEmail.trim() !== '') ? rawEmail : "อีเมลที่คุณลงทะเบียนไว้";
+            const emailDisplay = (rawEmail && rawEmail.trim() !== '') ? rawEmail : (window.state.studentId + "@kmitl.ac.th");
 
             return `
                 <div class="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-[9998] flex items-center justify-center p-5 page-transition">
@@ -1120,7 +1292,7 @@
                         <div class="grid grid-cols-2 gap-3 mt-8">
                             <button onclick="window.closeEditGuide()" class="py-3.5 bg-slate-100 text-slate-600 font-bold rounded-2xl hover:bg-slate-200 active:scale-95 transition-all text-xs uppercase tracking-widest">ยกเลิก</button>
                             <button onclick="window.proceedToEdit()" class="py-3.5 bg-indigo-600 text-white font-bold rounded-2xl shadow-xl shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-2">
-                                แก้ไข
+                                แก้ไขข้อมูล
                             </button>
                         </div>
                     </div>
@@ -1144,14 +1316,14 @@
                         <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 flex flex-col items-center gap-4 relative">
                             <div id="preview-loading-text" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center text-slate-500">
                                 <div class="w-8 h-8 border-4 border-slate-300 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
-                                <span class="font-bold text-xs tracking-widest uppercase">กำลังสร้างภาพพรีวิว...</span>
+                                <span class="font-bold text-xs tracking-widest uppercase">กำลังสร้างภาพรายงาน...</span>
                             </div>
                             <div id="preview-images-container" class="flex flex-col gap-4 w-full items-center">
                             </div>
                         </div>
 
                         <div class="p-4 sm:px-5 border-t border-slate-100 bg-slate-50 flex flex-wrap justify-end gap-2 shrink-0">
-                            <button onclick="window.closeExportPreview()" class="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-[13px] font-bold shadow-sm transition-colors hover:bg-slate-100">ปิดหน้าต่าง</button>
+                            <button onclick="window.closeExportPreview()" class="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-lg text-[13px] font-bold shadow-sm transition-colors hover:bg-slate-100 uppercase">ปิด</button>
                             <button onclick="window.downloadFromPreview('image')" class="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[13px] font-bold shadow-sm transition-all active:scale-95"><i data-lucide="image" size="16"></i> รูปภาพ (PNG)</button>
                             <button onclick="window.downloadFromPreview('pdf')" class="flex items-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[13px] font-bold shadow-sm transition-all active:scale-95"><i data-lucide="file-pdf" size="16"></i> เอกสาร (PDF)</button>
                         </div>
