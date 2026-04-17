@@ -90,6 +90,7 @@
     
     <div id="modal-container"></div>
     <div id="preview-modal-container"></div>
+    <div id="edit-guide-modal-container"></div>
 
     <!-- Hidden Renderer (สำหรับเรนเดอร์รูปภาพโดยไม่ให้หน้าเว็บเพี้ยน) -->
     <div id="offscreenRenderer" style="position: fixed; top: 0; left: -3000vw; z-index: -9999; pointer-events: none; opacity: 0;"></div>
@@ -113,7 +114,6 @@
 
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
-        const analytics = getAnalytics(app);
         const auth = getAuth(app);
         const db = getFirestore(app);
         const appId = 'thesis-check-app';
@@ -147,15 +147,35 @@
             settings: { 
                 editFormUrl: "",
                 sheetUrl: DEFAULT_SHEET_URL,
+                sessionDuration: 30, // ค่าเริ่มต้น 30 นาที
                 labels: { ...DEFAULT_LABELS }
             },
             confirmations: {}, 
             isLoading: true,
+            loginTimestamp: null,
             modal: { show: false, title: '', message: '', type: 'info' },
-            showPreviewModal: false 
+            showPreviewModal: false,
+            showEditGuideModal: false,
+            adminSettingsExpanded: false 
         };
 
         window.cachedExportDataURLs = []; 
+
+        // ฟังก์ชันตรวจสอบเซสชัน
+        window.checkSessionStatus = () => {
+            if (window.state.view !== 'login' && window.state.loginTimestamp) {
+                const now = Date.now();
+                const diffMinutes = (now - window.state.loginTimestamp) / 1000 / 60;
+                
+                if (diffMinutes >= (window.state.settings.sessionDuration || 30)) {
+                    window.logout();
+                    window.uiAlert("เซสชันหมดอายุเนื่องจากใช้งานครบเวลาที่กำหนด โปรดเข้าสู่ระบบใหม่อีกครั้ง", "info");
+                }
+            }
+        };
+
+        // ตรวจสอบทุกๆ 10 วินาที
+        setInterval(() => window.checkSessionStatus(), 10000);
 
         // ฟังก์ชันสำหรับแปลงข้อความที่มีลิงก์ ให้สามารถคลิกได้
         window.formatValue = (text) => {
@@ -201,17 +221,25 @@
                 if (parsed.length > 0) {
                     const headers = parsed[0];
                     const dataRows = parsed.slice(1);
-                    const prefixes = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '2.4', '3.1', '3.2', '3.3'];
+                    
+                    const prefixes = ['0', '1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '2.4', '3.1', '3.2', '3.3'];
                     const headerMap = {};
                     prefixes.forEach(p => headerMap[p] = []);
 
                     headers.forEach((header, index) => {
-                        prefixes.forEach(p => { if (header.includes(p)) headerMap[p].push(index); });
+                        prefixes.forEach(p => { 
+                            const regex = new RegExp(`(^|\\s)${p}(\\s|:|\\.|$)`);
+                            if (regex.test(header)) headerMap[p].push(index); 
+                        });
                     });
 
                     const newData = dataRows.map(row => {
                         let obj = {};
-                        prefixes.forEach(p => {
+                        const emailIdx = headerMap['0'][0];
+                        obj.email = (emailIdx !== undefined && row[emailIdx]) ? row[emailIdx].trim() : '';
+                        
+                        const dataPrefixes = ['1.1', '1.2', '1.3', '2.1', '2.2', '2.3', '2.4', '3.1', '3.2', '3.3'];
+                        dataPrefixes.forEach(p => {
                             let values = headerMap[p].map(idx => row[idx] ? row[idx].trim() : '').filter(v => v !== '');
                             obj[p] = values.join('\n\n'); 
                         });
@@ -234,12 +262,6 @@
             } catch (error) {
                 if (!isBackgroundPoll) {
                     console.error("Error fetching sheet:", error);
-                    window.state.sheetData = [
-                        { "1.1": "65030001", "1.2": "นายใจดี เรียนเก่ง (ดี)", "1.3": "IG: jaidee_th\nhttps://instagram.com", "2.1": "การศึกษา AI (Study of AI)", "2.2": "ผศ.ดร.สมชาย ใจมั่น", "2.3": "วิจัยเชิงทดลอง", "2.4": "สร้างแบบจำลอง AI สำหรับผู้สูงอายุ", "3.1": "https://drive.google.com/drive/1", "3.2": "https://drive.google.com/drive/2", "3.3": "https://drive.google.com/drive/3" }
-                    ];
-                    if(window.state.isLoading) {
-                        window.uiAlert("เกิดข้อผิดพลาดในการโหลดข้อมูลจริง กำลังแสดงข้อมูลจำลองเพื่อการทดสอบ", "info");
-                    }
                 }
             }
         }
@@ -261,10 +283,10 @@
 
                         const pollData = async () => {
                             await fetchSheetData(true); 
-                            window.pollingTimer = setTimeout(pollData, 3000);
+                            window.pollingTimer = setTimeout(pollData, 5000);
                         };
                         if (window.pollingTimer) clearTimeout(window.pollingTimer);
-                        window.pollingTimer = setTimeout(pollData, 3000);
+                        window.pollingTimer = setTimeout(pollData, 1000);
                     }
                 });
             } catch (err) { 
@@ -283,6 +305,7 @@
                     const data = s.data();
                     window.state.settings.editFormUrl = data.editFormUrl ?? window.state.settings.editFormUrl;
                     window.state.settings.sheetUrl = data.sheetUrl ?? window.state.settings.sheetUrl;
+                    window.state.settings.sessionDuration = data.sessionDuration ?? window.state.settings.sessionDuration;
                     window.state.settings.labels = { ...window.state.settings.labels, ...(data.labels || {}) };
                 }
 
@@ -317,6 +340,8 @@
                 window.state.isAdmin = true;
                 window.state.studentId = "ADMIN";
                 window.state.view = 'admin';
+                window.state.adminSettingsExpanded = false; 
+                window.state.loginTimestamp = Date.now();
             } else {
                 const student = window.state.sheetData.find(row => row['1.1'] === input);
                 if (student) {
@@ -324,6 +349,7 @@
                     window.state.studentId = input;
                     window.state.currentStudentData = student;
                     window.state.view = 'student';
+                    window.state.loginTimestamp = Date.now();
                 } else {
                     return window.uiAlert("ไม่พบข้อมูลรหัสนักศึกษานี้ในระบบ", "error");
                 }
@@ -336,10 +362,15 @@
             window.state.studentId = '';
             window.state.isAdmin = false;
             window.state.currentStudentData = null;
+            window.state.loginTimestamp = null;
             render();
         };
 
-        // ตรวจสอบและยกเลิกการยืนยันอัตโนมัติหากข้อมูลเปลี่ยนไปจากตอนที่กดยืนยัน
+        window.toggleAdminSettings = () => {
+            window.state.adminSettingsExpanded = !window.state.adminSettingsExpanded;
+            render();
+        };
+
         window.verifyConfirmationsAgainstData = async () => {
             if (!window.state.user || !window.state.sheetData.length || Object.keys(window.state.confirmations).length === 0) return;
 
@@ -396,7 +427,6 @@
             let currentData = window.state.confirmations[sid] || { s1: false, s2: false, s3: false };
             let updatedData = { ...currentData, [section]: !currentData[section] };
             
-            // บันทึก Hash ของข้อมูล ณ ปัจจุบัน เพื่อใช้เทียบเวลามีคนแก้ข้อมูลทีหลัง
             if (updatedData.s1) updatedData.s1_hash = `${data['1.1']}|${data['1.2']}|${data['1.3']}`;
             if (updatedData.s2) updatedData.s2_hash = `${data['2.1']}|${data['2.2']}|${data['2.3']}|${data['2.4']}`;
             if (updatedData.s3) updatedData.s3_hash = `${data['3.1']}|${data['3.2']}|${data['3.3']}`;
@@ -450,12 +480,6 @@
                     }
                 });
 
-                const editBtn = document.getElementById('student-edit-btn');
-                if (editBtn) {
-                    editBtn.href = window.state.settings.editFormUrl || '#';
-                    editBtn.onclick = window.state.settings.editFormUrl ? null : (e) => { e.preventDefault(); window.uiAlert('แอดมินยังไม่ได้ตั้งค่าลิงก์แก้ไขข้อมูล', 'error'); };
-                }
-
                 const bottomBar = document.getElementById('student-status-btn');
                 if (bottomBar) {
                     if (isAllConfirmed) {
@@ -479,6 +503,7 @@
             const newSettings = {
                 editFormUrl: form.formUrl.value.trim(),
                 sheetUrl: form.sheetUrl.value.trim(),
+                sessionDuration: parseInt(form.sessionDuration.value) || 30,
                 labels: {
                     "s1_title": form.lbl_s1_title.value.trim(),
                     "1.1": form.lbl_1_1.value.trim(),
@@ -498,13 +523,14 @@
 
             try {
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config'), newSettings, { merge: true });
+                window.state.adminSettingsExpanded = false; 
                 window.uiAlert("บันทึกการตั้งค่าระบบเรียบร้อยแล้ว ระบบกำลังดึงข้อมูลใหม่", "success");
+                render(); 
             } catch (err) {
                 window.uiAlert("เกิดข้อผิดพลาดในการบันทึก", "error");
             }
         };
 
-        // --- Export Functions ---
         window.exportToExcel = () => {
             const students = window.state.sheetData;
             if(!students || students.length === 0) return window.uiAlert("ไม่มีข้อมูลให้ส่งออก", "error");
@@ -514,6 +540,7 @@
                 const conf = window.state.confirmations[sid] || {};
                 const isAllConfirmed = conf.s1 && conf.s2 && conf.s3;
                 return {
+                    'อีเมล': s['email'],
                     'รหัสนักศึกษา': s['1.1'],
                     'ชื่อ-นามสกุล': s['1.2'],
                     'ส่วนที่ 1 (ส่วนตัว)': conf.s1 ? 'ยืนยันแล้ว' : 'รอดำเนินการ',
@@ -690,6 +717,32 @@
             }
         };
 
+        window.openEditGuide = () => {
+            if (!window.state.settings.editFormUrl) {
+                return window.uiAlert('ผู้ดูแลระบบยังไม่ได้กำหนดช่องทางการแจ้งแก้ไขข้อมูล', 'error');
+            }
+            window.state.showEditGuideModal = true;
+            window.updateEditGuideUI();
+        };
+
+        window.closeEditGuide = () => {
+            window.state.showEditGuideModal = false;
+            window.updateEditGuideUI();
+        };
+
+        window.proceedToEdit = () => {
+            window.open(window.state.settings.editFormUrl, '_blank');
+            window.closeEditGuide();
+        };
+
+        window.updateEditGuideUI = () => {
+            const container = document.getElementById('edit-guide-modal-container');
+            if (container) {
+                container.innerHTML = renderEditGuideModal();
+                lucide.createIcons();
+            }
+        };
+
         window.uiAlert = (message, type = 'info') => {
             window.state.modal = { show: true, title: type === 'error' ? 'ข้อผิดพลาด' : type === 'success' ? 'สำเร็จ' : 'แจ้งเตือน', message, type };
             window.updateModalUI();
@@ -802,10 +855,10 @@
                 
                 <div class="fixed bottom-0 left-0 right-0 glass-bottom z-40 pb-4 pt-6 px-4 pointer-events-none">
                     <div class="max-w-2xl mx-auto flex gap-2 sm:gap-3 pointer-events-auto">
-                        <a id="student-edit-btn" href="${window.state.settings.editFormUrl || '#'}" target="_blank" onclick="${!window.state.settings.editFormUrl ? "event.preventDefault(); window.uiAlert('แอดมินยังไม่ได้ตั้งค่าลิงก์แก้ไขข้อมูล', 'error');" : ""}" 
+                        <button onclick="window.openEditGuide()" 
                            class="flex-1 py-3 bg-white text-red-500 font-bold rounded-xl shadow-xl hover:bg-red-50 active:scale-95 transition-all text-xs uppercase tracking-widest border-2 border-red-100 flex items-center justify-center gap-1.5">
                             <i data-lucide="file-edit" size="16"></i> แจ้งแก้ไข
-                        </a>
+                        </button>
                         ${isAllConfirmed ? `
                             <button id="student-status-btn" onclick="window.uiAlert('คุณได้ยืนยันข้อมูลครบถ้วนทั้ง 3 ส่วนเรียบร้อยแล้ว ขอบคุณครับ', 'success')" class="flex-1 py-3 bg-green-500 text-white font-bold rounded-xl shadow-xl border-b-4 border-green-700 hover:bg-green-600 active:scale-[0.98] flex items-center justify-center gap-1.5 text-xs uppercase tracking-widest cursor-pointer transition-all">
                                 <i data-lucide="check-circle-2" size="16"></i> ยืนยันครบถ้วน
@@ -881,22 +934,34 @@
                             </div>
                         </div>
 
-                        <!-- ส่วนตั้งค่าระบบ และลิงก์ฐานข้อมูล -->
-                        <div class="bg-white p-5 md:p-6 rounded-3xl border border-slate-200 shadow-sm">
-                            <h2 class="text-lg font-black text-slate-800 mb-5 flex items-center gap-2">
-                                <i data-lucide="settings" class="text-indigo-600" size="20"></i> ตั้งค่าระบบและลิงก์ข้อมูล
-                            </h2>
-                            <form onsubmit="window.saveAdminSettings(event)" class="space-y-5">
+                        <div class="bg-white p-5 md:p-6 rounded-3xl border border-slate-200 shadow-sm transition-all">
+                            <div class="flex justify-between items-center cursor-pointer select-none" onclick="window.toggleAdminSettings()">
+                                <h2 class="text-lg font-black text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="settings" class="text-indigo-600" size="20"></i> ตั้งค่าระบบและลิงก์ข้อมูล
+                                </h2>
+                                <div class="p-1.5 bg-slate-50 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                                    <i data-lucide="${window.state.adminSettingsExpanded ? 'chevron-up' : 'chevron-down'}" size="18"></i>
+                                </div>
+                            </div>
+                            
+                            <form onsubmit="window.saveAdminSettings(event)" class="space-y-5 ${window.state.adminSettingsExpanded ? 'block mt-6' : 'hidden'}">
                                 
                                 <div class="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                    <h3 class="font-bold text-slate-700 border-b border-slate-200 pb-2 mb-3 text-[13px]">การเชื่อมต่อข้อมูล</h3>
-                                    <div>
-                                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Sheets (CSV Export URL)</label>
-                                        <input type="url" name="sheetUrl" value="${window.state.settings.sheetUrl || ''}" placeholder="https://docs.google.com/spreadsheets/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner" required>
+                                    <h3 class="font-bold text-slate-700 border-b border-slate-200 pb-2 mb-3 text-[13px]">การเชื่อมต่อข้อมูลและเซสชัน</h3>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Sheets (CSV Export URL)</label>
+                                            <input type="url" name="sheetUrl" value="${window.state.settings.sheetUrl || ''}" placeholder="https://docs.google.com/spreadsheets/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner" required>
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Form (แจ้งแก้ไขข้อมูล)</label>
+                                            <input type="url" name="formUrl" value="${window.state.settings.editFormUrl || ''}" placeholder="https://forms.gle/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner">
+                                        </div>
                                     </div>
                                     <div>
-                                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ลิงก์ Google Form (แจ้งแก้ไขข้อมูล)</label>
-                                        <input type="url" name="formUrl" value="${window.state.settings.editFormUrl || ''}" placeholder="https://forms.gle/..." class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner">
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ระยะเวลาเซสชัน (นาที)</label>
+                                        <input type="number" name="sessionDuration" value="${window.state.settings.sessionDuration || 30}" min="1" max="1440" class="w-full max-w-[200px] p-3 rounded-lg bg-white border border-slate-200 font-medium text-[13px] outline-none focus:border-indigo-500 shadow-inner">
+                                        <p class="text-[9px] text-slate-400 mt-1 italic">* ผู้ใช้จะถูกออกจากระบบอัตโนมัติเมื่อครบเวลาที่กำหนดหลังเข้าสู่ระบบ</p>
                                     </div>
                                 </div>
 
@@ -954,7 +1019,7 @@
                                 <table class="w-full min-w-[600px] text-left border-collapse">
                                     <thead class="border-b-2 border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
                                         <tr>
-                                            <th class="pb-3 pl-2">รหัส / ชื่อ</th>
+                                            <th class="pb-3 pl-2">รหัส / ชื่อ / อีเมล</th>
                                             <th class="pb-3 text-center">ส่วนที่ 1</th>
                                             <th class="pb-3 text-center">ส่วนที่ 2</th>
                                             <th class="pb-3 text-center">ส่วนที่ 3</th>
@@ -967,6 +1032,7 @@
                                                 <td class="py-3 pl-2">
                                                     <p class="font-black text-slate-800 text-[13px]">${s['1.1']}</p>
                                                     <p class="text-[10px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
+                                                    <p class="text-[9px] text-indigo-400 font-bold">${s['email'] || '-'}</p>
                                                 </td>
                                                 <td class="py-3 text-center">
                                                     ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
@@ -1010,6 +1076,58 @@
             `;
         }
 
+        function renderEditGuideModal() {
+            if (!window.state.showEditGuideModal) return "";
+            
+            const rawEmail = window.state.currentStudentData?.email;
+            const emailDisplay = (rawEmail && rawEmail.trim() !== '') ? rawEmail : "อีเมลที่คุณลงทะเบียนไว้";
+
+            return `
+                <div class="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-[9998] flex items-center justify-center p-5 page-transition">
+                    <div class="bg-white rounded-[2.5rem] p-8 max-w-md w-full shadow-2xl border border-white relative overflow-hidden">
+                        <div class="absolute top-0 right-0 p-4">
+                            <button onclick="window.closeEditGuide()" class="text-slate-300 hover:text-slate-500 transition-colors"><i data-lucide="x" size="24"></i></button>
+                        </div>
+                        
+                        <div class="w-16 h-16 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mb-6">
+                            <i data-lucide="file-warning" size="32"></i>
+                        </div>
+                        
+                        <h3 class="text-xl font-black text-slate-800 mb-4 leading-tight">คำแนะนำการแจ้งแก้ไขข้อมูล</h3>
+                        
+                        <div class="space-y-4 text-left">
+                            <div class="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                                <p class="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-1">ขั้นตอนสำคัญ</p>
+                                <p class="text-[13px] text-slate-700 font-medium leading-relaxed">
+                                    โปรดลงชื่อเข้าใช้ (Log-in) Google ด้วยอีเมล: <br>
+                                    <span class="font-black text-indigo-700 break-all">${emailDisplay}</span> <br>
+                                    เพื่อใช้ในการกรอกแบบฟอร์มแก้ไขข้อมูล
+                                </p>
+                            </div>
+                            
+                            <ul class="space-y-3 text-[12px] text-slate-500 font-medium">
+                                <li class="flex gap-3">
+                                    <i data-lucide="check-circle" size="16" class="text-green-500 flex-shrink-0 mt-0.5"></i>
+                                    <span>ข้อมูลเดิมของท่านจะยังคงอยู่ในระบบจนกว่าการดำเนินการแก้ไขจะเสร็จสมบูรณ์</span>
+                                </li>
+                                <li class="flex gap-3">
+                                    <i data-lucide="info" size="16" class="text-amber-500 flex-shrink-0 mt-0.5"></i>
+                                    <span>หากแบบฟอร์มให้กรอกข้อมูลใหม่ทั้งหมด หรือพบปัญหาในการเข้าใช้งาน โปรดติดต่อผู้ดูแลระบบโดยตรง</span>
+                                </li>
+                            </ul>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-3 mt-8">
+                            <button onclick="window.closeEditGuide()" class="py-3.5 bg-slate-100 text-slate-600 font-bold rounded-2xl hover:bg-slate-200 active:scale-95 transition-all text-xs uppercase tracking-widest">ยกเลิก</button>
+                            <button onclick="window.proceedToEdit()" class="py-3.5 bg-indigo-600 text-white font-bold rounded-2xl shadow-xl shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all text-xs uppercase tracking-widest flex items-center justify-center gap-2">
+                                ไปยังแบบฟอร์ม <i data-lucide="external-link" size="14"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function renderPreviewModal() {
             if (!window.state.showPreviewModal) return "";
             return `
@@ -1029,7 +1147,6 @@
                                 <span class="font-bold text-xs tracking-widest uppercase">กำลังสร้างภาพพรีวิว...</span>
                             </div>
                             <div id="preview-images-container" class="flex flex-col gap-4 w-full items-center">
-                                <!-- รูปภาพจะถูกเพิ่มมาที่นี่ -->
                             </div>
                         </div>
 
@@ -1059,6 +1176,7 @@
             app.innerHTML = mainContent;
             window.updateModalUI();
             window.updatePreviewModalUI();
+            window.updateEditGuideUI();
             lucide.createIcons();
         }
 
