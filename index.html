@@ -192,6 +192,10 @@
                 editFormUrl: "",
                 sheetUrl: DEFAULT_SHEET_URL,
                 sessionDuration: 30,
+                isSystemOpen: true,
+                systemCloseMessage: "ระบบปิดรับการยืนยันข้อมูลแล้ว",
+                openTime: "",
+                closeTime: "",
                 labels: { ...DEFAULT_LABELS }
             },
             confirmations: {}, 
@@ -216,6 +220,18 @@
 
         window.cachedExportDataURLs = []; 
 
+        // ฟังก์ชันสำหรับตรวจสอบเวลาเปิด-ปิดระบบ
+        window.isSystemCurrentlyOpen = () => {
+            const s = window.state.settings;
+            if (s.isSystemOpen === false) return false; // ปิดแบบแมนนวล
+            
+            const now = new Date().getTime();
+            if (s.openTime && now < new Date(s.openTime).getTime()) return false; // ยังไม่ถึงเวลาเปิด
+            if (s.closeTime && now > new Date(s.closeTime).getTime()) return false; // เลยเวลาปิดแล้ว
+            
+            return true;
+        };
+
         window.checkSessionStatus = () => {
             if (window.state.view !== 'login' && window.state.loginTimestamp) {
                 const now = Date.now();
@@ -223,6 +239,13 @@
                 if (diffMinutes >= (window.state.settings.sessionDuration || 30)) {
                     window.logout();
                     window.uiAlert("เซสชันหมดอายุเนื่องจากใช้งานครบเวลาที่กำหนด โปรดเข้าสู่ระบบใหม่อีกครั้ง", "info");
+                    return;
+                }
+
+                // เตะนักศึกษาออก ถ้าระบบถูกแอดมินปิดกลางคัน
+                if (!window.state.isAdmin && !window.isSystemCurrentlyOpen()) {
+                    window.logout();
+                    window.uiAlert(window.state.settings.systemCloseMessage || "ระบบปิดให้บริการ/หมดเวลาแล้ว", "info");
                 }
             }
         };
@@ -467,6 +490,12 @@
                     window.state.settings.sheetUrl = data.sheetUrl ?? window.state.settings.sheetUrl;
                     window.state.settings.sessionDuration = data.sessionDuration ?? window.state.settings.sessionDuration;
                     window.state.settings.labels = { ...window.state.settings.labels, ...(data.labels || {}) };
+                    
+                    // อัปเดตข้อมูลสถานะระบบใหม่
+                    window.state.settings.isSystemOpen = data.isSystemOpen ?? true;
+                    window.state.settings.systemCloseMessage = data.systemCloseMessage ?? "ระบบปิดรับการยืนยันข้อมูลแล้ว";
+                    window.state.settings.openTime = data.openTime ?? "";
+                    window.state.settings.closeTime = data.closeTime ?? "";
                 }
 
                 if (oldSheetUrl !== window.state.settings.sheetUrl || window.state.sheetData.length === 0) {
@@ -475,6 +504,11 @@
 
                 if (!window.state.isLoading) {
                     window.softUpdateUI();
+                    
+                    // เรียกเช็คอีกรอบเผื่อแอดมินปิดระบบกลางคันขณะอยู่ที่หน้าล็อกอิน
+                    if (window.state.view === 'login') {
+                        render();
+                    }
                 }
             }, (error) => { 
                 console.error("Settings Snapshot error:", error); 
@@ -511,7 +545,7 @@
             if (e) e.preventDefault();
             const inputId = document.getElementById('login_id').value.trim();
             
-            // ตรวจสอบว่าเป็น Admin หรือไม่ (ข้าม OTP ทันที)
+            // ตรวจสอบว่าเป็น Admin หรือไม่ (ข้าม OTP ทันที และข้ามการเช็คว่าระบบเปิดหรือปิดอยู่)
             if (inputId === "65030900") {
                 window.state.isAdmin = true;
                 window.state.studentId = inputId;
@@ -535,6 +569,11 @@
                 }
                 render();
                 return;
+            }
+
+            // ถ้าระบบปิดอยู่ ให้เด้งแจ้งเตือนและบล็อกทันที (สำหรับนักศึกษา)
+            if (!window.isSystemCurrentlyOpen()) {
+                return window.uiAlert(window.state.settings.systemCloseMessage || "ระบบปิดให้บริการในขณะนี้", "error");
             }
 
             const student = window.state.sheetData.find(row => row['1.1'] === inputId);
@@ -785,6 +824,11 @@
                 editFormUrl: form.formUrl.value.trim(),
                 sheetUrl: form.sheetUrl.value.trim(),
                 sessionDuration: parseInt(form.sessionDuration.value) || 30,
+                // การตั้งค่าเปิด-ปิดระบบ
+                isSystemOpen: form.isSystemOpen.value === 'true',
+                systemCloseMessage: form.systemCloseMessage.value.trim() || 'ระบบปิดรับการยืนยันข้อมูลแล้ว',
+                openTime: form.openTime.value,
+                closeTime: form.closeTime.value,
                 labels: {
                     "s1_title": form.lbl_s1_title.value.trim(),
                     "1.1": form.lbl_1_1.value.trim(),
@@ -1147,6 +1191,14 @@
         function renderLogin() {
             const isOtpStep = window.state.loginStep === 'otp';
             const sId = window.state.studentId || '';
+            const isOpen = window.isSystemCurrentlyOpen();
+
+            const closedBanner = !isOpen ? `
+                <div class="mb-5 bg-red-50 p-3 rounded-xl border border-red-100 text-red-600 text-xs font-bold flex items-start gap-2 text-left">
+                    <i data-lucide="lock" size="18" class="shrink-0 mt-0.5"></i>
+                    <span class="whitespace-pre-line leading-relaxed">${window.state.settings.systemCloseMessage || 'ระบบปิดให้บริการในขณะนี้'}</span>
+                </div>
+            ` : '';
 
             return `
                 <div class="h-[100dvh] w-full flex flex-col items-center justify-center p-4 bg-slate-50 relative overflow-hidden">
@@ -1164,6 +1216,7 @@
                         
                         <div class="mt-8">
                             ${!isOtpStep ? `
+                                ${closedBanner}
                                 <form onsubmit="window.requestOtp(event)" class="space-y-4">
                                     <div class="relative">
                                         <i data-lucide="user" class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size="18"></i>
@@ -1376,6 +1429,34 @@
                             
                             <form onsubmit="window.saveAdminSettings(event)" class="space-y-5 ${window.state.adminSettingsExpanded ? 'block mt-6' : 'hidden'}">
                                 
+                                <div class="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                    <h3 class="font-bold text-slate-700 border-b border-slate-200 pb-2 mb-3 text-[13px]">การเปิด/ปิดระบบ</h3>
+                                    
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">สถานะระบบ</label>
+                                        <select name="isSystemOpen" class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-base outline-none focus:border-indigo-500 shadow-inner">
+                                            <option value="true" ${window.state.settings.isSystemOpen ? 'selected' : ''}>เปิดให้บริการ</option>
+                                            <option value="false" ${!window.state.settings.isSystemOpen ? 'selected' : ''}>ปิดระบบ (บังคับปิดทันที)</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">เวลาเปิด (ตั้งเวลาล่วงหน้า - ไม่บังคับ)</label>
+                                            <input type="datetime-local" name="openTime" value="${window.state.settings.openTime || ''}" class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-base outline-none focus:border-indigo-500 shadow-inner">
+                                        </div>
+                                        <div>
+                                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">เวลาปิด (ปิดอัตโนมัติ - ไม่บังคับ)</label>
+                                            <input type="datetime-local" name="closeTime" value="${window.state.settings.closeTime || ''}" class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-base outline-none focus:border-indigo-500 shadow-inner">
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">ข้อความเมื่อระบบปิด</label>
+                                        <textarea name="systemCloseMessage" placeholder="เช่น ระบบปิดรับการยืนยันข้อมูลแล้ว" rows="3" class="w-full p-3 rounded-lg bg-white border border-slate-200 font-medium text-base outline-none focus:border-indigo-500 shadow-inner resize-none custom-scrollbar">${window.state.settings.systemCloseMessage || ''}</textarea>
+                                    </div>
+                                </div>
+
                                 <div class="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
                                     <h3 class="font-bold text-slate-700 border-b border-slate-200 pb-2 mb-3 text-[13px]">การเชื่อมต่อข้อมูลและเซสชัน</h3>
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1650,7 +1731,7 @@
                             <i data-lucide="${window.state.modal.type === 'error' ? 'alert-octagon' : window.state.modal.type === 'success' ? 'check-circle' : 'info'}" size="24"></i>
                         </div>
                         <h3 class="text-[15px] font-black text-slate-800 mb-2 leading-tight">${window.state.modal.title}</h3>
-                        <p class="text-[13px] text-slate-500 font-medium leading-relaxed">${window.state.modal.message}</p>
+                        <p class="text-[13px] text-slate-500 font-medium leading-relaxed whitespace-pre-line">${window.state.modal.message}</p>
                         <button onclick="window.closeModal()" class="w-full mt-5 py-3 bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:bg-black active:scale-95 transition-all text-sm">ตกลง</button>
                     </div>
                 </div>
