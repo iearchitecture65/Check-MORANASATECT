@@ -121,6 +121,7 @@
     <div id="modal-container"></div>
     <div id="preview-modal-container"></div>
     <div id="edit-guide-modal-container"></div>
+    <div id="logs-modal-container"></div>
 
     <!-- Hidden Renderer (สำหรับเรนเดอร์รูปภาพโดยไม่ให้หน้าเว็บเพี้ยน) -->
     <div id="offscreenRenderer" style="position: fixed; top: 0; left: -3000vw; z-index: -9999; pointer-events: none; opacity: 0;"></div>
@@ -128,7 +129,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, collection, onSnapshot, setDoc, getDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, collection, onSnapshot, setDoc, getDoc, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
 
         // ป้องกัน Pinch Zoom และ Double Tap Zoom ผ่าน JavaScript เพิ่มเติม
@@ -185,6 +186,7 @@
             isAdmin: false,
             sheetData: [],
             currentStudentData: null,
+            logs: [],
             settings: { 
                 editFormUrl: "",
                 sheetUrl: DEFAULT_SHEET_URL,
@@ -198,6 +200,7 @@
             modal: { show: false, title: '', message: '', type: 'info' },
             showPreviewModal: false,
             showEditGuideModal: false,
+            showLogsModal: false,
             adminSettingsExpanded: false,
             // OTP State
             loginStep: 'id', // 'id' or 'otp'
@@ -308,6 +311,21 @@
             }
         }
 
+        // ฟังก์ชันช่วยในการบันทึกประวัติการเข้าใช้งาน
+        async function logActivity(sid, adminMode) {
+            if (!window.state.user) return;
+            try {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'logs'), {
+                    studentId: sid,
+                    type: adminMode ? 'admin' : 'student',
+                    timestamp: Date.now(),
+                    userAgent: navigator.userAgent
+                });
+            } catch (e) {
+                console.error("Failed to log activity", e);
+            }
+        }
+
         async function init() {
             try {
                 // พยายามลงชื่อเข้าใช้เบื้องหลัง
@@ -402,7 +420,7 @@
                     window.softUpdateUI();
                 }
             }, (error) => { 
-                console.error("Settings Snapshot error (อาจจะยังไม่มีไฟล์ config):", error); 
+                console.error("Settings Snapshot error:", error); 
             });
 
             // Listen for confirmations
@@ -415,7 +433,21 @@
                     }
                 }
             }, (error) => { console.error("Confirmations Snapshot error:", error); });
+
+            // Listen for logs (ประวัติการเข้าใช้งาน)
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'logs'), (s) => {
+                window.state.logs = s.docs.map(d => d.data());
+                if (window.state.view === 'admin') {
+                    window.softUpdateAdminUI();
+                }
+            }, (error) => { console.error("Logs Snapshot error:", error); });
         }
+
+        window.softUpdateAdminUI = () => {
+             if (window.state.view === 'admin') {
+                render();
+            }
+        };
 
         // --- OTP Actions ---
         window.requestOtp = async (e) => {
@@ -432,6 +464,9 @@
 
                 if (window.state.user) {
                     try {
+                        // บันทึกประวัติการเข้างาน Admin
+                        await logActivity(inputId, true);
+                        
                         await setDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'), {
                             studentId: window.state.studentId,
                             isAdmin: true,
@@ -514,6 +549,9 @@
                 
                 if (window.state.user) {
                     try {
+                        // บันทึกประวัติการเข้าใช้งาน
+                        await logActivity(window.state.studentId, window.state.isAdmin);
+                        
                         await setDoc(doc(db, 'artifacts', appId, 'users', window.state.user.uid, 'system', 'session'), {
                             studentId: window.state.studentId,
                             isAdmin: window.state.isAdmin,
@@ -741,6 +779,40 @@
             XLSX.writeFile(wb, "ThesisCheck_Data.xlsx");
         };
 
+        window.exportLogsToExcel = () => {
+            const logs = window.state.logs;
+            if(!logs || logs.length === 0) return window.uiAlert("ไม่มีข้อมูลประวัติให้ส่งออก", "error");
+            
+            const exportData = [...logs].sort((a,b) => b.timestamp - a.timestamp).map(l => ({
+                'วัน-เวลา': new Date(l.timestamp).toLocaleString('th-TH'),
+                'รหัสผู้ใช้งาน': l.studentId,
+                'ประเภท': l.type,
+                'Device/Browser': l.userAgent
+            }));
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Access History");
+            XLSX.writeFile(wb, "ThesisCheck_AccessLogs.xlsx");
+        };
+
+        window.openLogsModal = () => {
+            window.state.showLogsModal = true;
+            window.updateLogsModalUI();
+        };
+
+        window.closeLogsModal = () => {
+            window.state.showLogsModal = false;
+            window.updateLogsModalUI();
+        };
+
+        window.updateLogsModalUI = () => {
+            const container = document.getElementById('logs-modal-container');
+            if (container) {
+                container.innerHTML = renderLogsModal();
+                lucide.createIcons();
+            }
+        };
+
         const generateExportPagesHTML = () => {
             const students = window.state.sheetData;
             const confirmations = window.state.confirmations;
@@ -850,7 +922,6 @@
                     
                     await new Promise(r => setTimeout(r, 500)); 
                     
-                    // ปรับ pixelRatio และ quality เพื่อลดขนาดรูปต้นทาง (ช่วยลดขนาด PDF)
                     const dataUrl = await htmlToImage.toPng(wrap, {
                         quality: 0.85, 
                         pixelRatio: 1.5, 
@@ -899,7 +970,6 @@
                 });
             } else {
                 const { jsPDF } = window.jspdf;
-                // เพิ่มการบีบอัดไฟล์ PDF ในระดับ FAST
                 const pdf = new jsPDF({
                     orientation: 'p',
                     unit: 'px',
@@ -909,7 +979,6 @@
                 
                 window.cachedExportDataURLs.forEach((url, idx) => {
                     if (idx > 0) pdf.addPage([794, 1123], 'p');
-                    // ใส่รูปภาพพร้อมกำหนดการบีบอัดเป็น 'FAST'
                     pdf.addImage(url, 'PNG', 0, 0, 794, 1123, undefined, 'FAST');
                 });
                 pdf.save(`${baseName}.pdf`);
@@ -1158,6 +1227,10 @@
                 return { ...s, isAllConfirmed, conf };
             });
 
+            // เฉพาะ 3 รายการแรกที่มี Opacity ไล่ระดับ
+            const topLogs = [...window.state.logs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 3);
+            const opacities = ['opacity-100', 'opacity-60', 'opacity-30'];
+
             return `
                 ${renderHeader('Administrator', 'ระบบจัดการข้อมูล')}
                 <div class="scrollable-content custom-scrollbar">
@@ -1173,6 +1246,41 @@
                                 <i data-lucide="check-circle" size="60" class="absolute -right-3 -bottom-3 text-white opacity-10"></i>
                                 <p class="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1">ยืนยันครบแล้ว</p>
                                 <p id="admin-confirmed-count" class="text-3xl font-black">${confirmedCount} <span class="text-xs font-normal opacity-80">คน</span></p>
+                            </div>
+                        </div>
+
+                        <!-- ปรับปรุงประวัติการใช้งานล่าสุดให้เป็น 3 รายการไล่สี -->
+                        <div class="bg-white p-5 md:p-6 rounded-3xl border border-slate-200 shadow-sm transition-all overflow-hidden">
+                            <div class="flex justify-between items-center mb-5">
+                                <h2 class="text-lg font-black text-slate-800 flex items-center gap-2">
+                                    <i data-lucide="history" class="text-indigo-600" size="20"></i> ประวัติการเข้าใช้งาน
+                                </h2>
+                                <div class="flex gap-2">
+                                    <button onclick="window.exportLogsToExcel()" class="p-2 bg-emerald-50 text-emerald-600 rounded-lg border border-emerald-100 hover:bg-emerald-100 transition-colors" title="Export Logs to Excel">
+                                        <i data-lucide="file-spreadsheet" size="18"></i>
+                                    </button>
+                                    <button onclick="window.openLogsModal()" class="px-3 py-1.5 bg-indigo-50 text-indigo-600 text-[11px] font-bold rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors flex items-center gap-1.5">
+                                        <i data-lucide="maximize-2" size="14"></i> ดูทั้งหมด
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="space-y-2">
+                                ${topLogs.map((log, idx) => `
+                                    <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 ${opacities[idx] || 'opacity-20'}">
+                                        <div class="flex items-center gap-3">
+                                            <div class="w-2 h-2 rounded-full ${log.type === 'admin' ? 'bg-purple-500' : 'bg-blue-500'}"></div>
+                                            <div>
+                                                <p class="text-[13px] font-black text-slate-800">${log.studentId}</p>
+                                                <p class="text-[10px] text-slate-400 font-bold uppercase tracking-tight">${log.type} &bull; ${new Date(log.timestamp).toLocaleTimeString('th-TH')}</p>
+                                            </div>
+                                        </div>
+                                        <div class="text-right">
+                                            <p class="text-[11px] font-bold text-slate-500">${new Date(log.timestamp).toLocaleDateString('th-TH')}</p>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                                ${topLogs.length === 0 ? '<p class="text-center py-4 text-slate-300 text-xs italic">ยังไม่มีประวัติการเข้าใช้งาน</p>' : ''}
                             </div>
                         </div>
 
@@ -1302,6 +1410,62 @@
             `;
         }
 
+        function renderLogsModal() {
+            if (!window.state.showLogsModal) return "";
+            const allLogs = [...window.state.logs].sort((a,b) => b.timestamp - a.timestamp);
+
+            return `
+                <div class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md page-transition">
+                    <div class="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+                        <div class="flex justify-between items-center p-5 border-b border-slate-100">
+                            <h3 class="text-lg font-black text-slate-800 flex items-center gap-2">
+                                <i data-lucide="history" class="text-indigo-600" size="22"></i> ประวัติการเข้าใช้งานทั้งหมด
+                            </h3>
+                            <button onclick="window.closeLogsModal()" class="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><i data-lucide="x" size="20"></i></button>
+                        </div>
+                        
+                        <div class="flex-1 overflow-auto p-4 custom-scrollbar">
+                            <table class="w-full text-left border-collapse">
+                                <thead class="sticky top-0 bg-white z-10">
+                                    <tr class="text-[10px] font-black uppercase text-slate-400 border-b border-slate-100">
+                                        <th class="py-3 pl-2 text-center w-12">#</th>
+                                        <th class="py-3">ผู้ใช้งาน</th>
+                                        <th class="py-3">วัน-เวลาที่เข้าใช้งาน</th>
+                                        <th class="py-3 text-right pr-2 w-20">ประเภท</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-50">
+                                    ${allLogs.map((log, i) => `
+                                        <tr class="hover:bg-slate-50 transition-colors">
+                                            <td class="py-3 text-center text-[10px] font-bold text-slate-300">${allLogs.length - i}</td>
+                                            <td class="py-3">
+                                                <p class="font-black text-slate-700 text-[13px]">${log.studentId}</p>
+                                                <p class="text-[9px] text-slate-400 font-medium truncate max-w-[200px]" title="${log.userAgent}">${log.userAgent}</p>
+                                            </td>
+                                            <td class="py-3 text-slate-500 text-[12px] font-medium">
+                                                ${new Date(log.timestamp).toLocaleString('th-TH')}
+                                            </td>
+                                            <td class="py-3 text-right pr-2">
+                                                <span class="px-2 py-0.5 rounded ${log.type === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'} font-black uppercase text-[8px]">
+                                                    ${log.type}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                    ${allLogs.length === 0 ? '<tr><td colspan="4" class="py-20 text-center text-slate-300 italic">ไม่มีข้อมูลประวัติ</td></tr>' : ''}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="p-4 border-t border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
+                            <span class="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Total: ${allLogs.length} Records</span>
+                            <button onclick="window.closeLogsModal()" class="px-6 py-2 bg-slate-900 text-white font-black text-[11px] rounded-xl hover:bg-black uppercase tracking-wider transition-all">ปิด</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function renderUIModal() {
             if (!window.state.modal.show) return "";
             return `
@@ -1383,7 +1547,6 @@
                         </div>
                         
                         <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 flex flex-col items-center relative min-h-[400px]">
-                            <!-- ปรับแก้ Loading ให้ขยายเต็มพื้นที่และไม่ถูกปุ่มบัง -->
                             <div id="preview-loading-text" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 z-10 bg-slate-100/50 backdrop-blur-[2px]">
                                 <div class="w-10 h-10 border-4 border-slate-300 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
                                 <span class="font-bold text-[11px] tracking-widest uppercase text-slate-600">ระบบกำลังประมวลผลและบีบอัดข้อมูล...</span>
@@ -1391,7 +1554,6 @@
                             </div>
                             
                             <div id="preview-images-container" class="flex flex-col gap-6 w-full items-center py-4">
-                                <!-- รูปพรีวิวจะปรากฏที่นี่ -->
                             </div>
                         </div>
 
@@ -1422,6 +1584,7 @@
             window.updateModalUI();
             window.updatePreviewModalUI();
             window.updateEditGuideUI();
+            window.updateLogsModalUI();
             lucide.createIcons();
         }
 
