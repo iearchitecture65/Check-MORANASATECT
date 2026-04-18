@@ -122,6 +122,7 @@
     <div id="preview-modal-container"></div>
     <div id="edit-guide-modal-container"></div>
     <div id="logs-modal-container"></div>
+    <div id="link-preview-modal-container"></div>
 
     <!-- Hidden Renderer (สำหรับเรนเดอร์รูปภาพโดยไม่ให้หน้าเว็บเพี้ยน) -->
     <div id="offscreenRenderer" style="position: fixed; top: 0; left: -3000vw; z-index: -9999; pointer-events: none; opacity: 0;"></div>
@@ -201,6 +202,8 @@
             showPreviewModal: false,
             showEditGuideModal: false,
             showLogsModal: false,
+            showLinkPreviewModal: false,
+            currentPreviewUrl: '',
             adminSettingsExpanded: false,
             // OTP State
             loginStep: 'id', // 'id' or 'otp'
@@ -225,7 +228,7 @@
 
         setInterval(() => window.checkSessionStatus(), 10000);
 
-        // ปรับปรุงฟังก์ชันแสดงผลลิงก์ให้แสดงเป็นชื่อไฟล์
+        // ปรับปรุงฟังก์ชันแสดงผลลิงก์ให้แสดงเป็นชื่อไฟล์ และเปิด Link Preview
         window.formatValue = (text) => {
             if (!text || text.trim() === '') return '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>';
             
@@ -255,13 +258,13 @@
                         fileName = fileName.substring(0, 32) + "...";
                     }
 
-                    return `<a href="${url}" target="_blank" class="text-indigo-500 underline hover:text-indigo-700 break-all font-bold inline-flex items-center gap-1.5 bg-indigo-50/50 px-2 py-0.5 rounded border border-indigo-100/50 transition-colors">
-                        <i data-lucide="file-link" class="w-3.5 h-3.5"></i> 
+                    return `<button onclick="window.openLinkPreview('${url}')" class="text-indigo-600 hover:text-indigo-800 break-all font-bold inline-flex items-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1.5 rounded-lg border border-indigo-200 transition-colors shadow-sm cursor-pointer mt-1">
+                        <i data-lucide="external-link" size="14" class="text-indigo-600 shrink-0"></i> 
                         <span class="text-[12px]">${fileName}</span>
-                    </a>`;
+                    </button>`;
                 } catch (e) {
-                    // ถ้าพังให้โชว์ URL เต็มตามปกติ
-                    return `<a href="${url}" target="_blank" class="text-indigo-500 underline font-medium">${url}</a>`;
+                    // ถ้าพังให้โชว์ URL เต็มเป็นปุ่ม
+                    return `<button onclick="window.openLinkPreview('${url}')" class="text-indigo-500 underline font-medium inline-flex items-center gap-1 mt-1"><i data-lucide="link" size="14"></i> ลิงก์</button>`;
                 }
             });
             
@@ -846,6 +849,27 @@
             }
         };
 
+        /* ======= Link Preview Modal Functions ======= */
+        window.openLinkPreview = (url) => {
+            window.state.currentPreviewUrl = url;
+            window.state.showLinkPreviewModal = true;
+            window.updateLinkPreviewModalUI();
+        };
+
+        window.closeLinkPreview = () => {
+            window.state.showLinkPreviewModal = false;
+            window.state.currentPreviewUrl = '';
+            window.updateLinkPreviewModalUI();
+        };
+
+        window.updateLinkPreviewModalUI = () => {
+            const container = document.getElementById('link-preview-modal-container');
+            if (container) {
+                container.innerHTML = renderLinkPreviewModal();
+                lucide.createIcons();
+            }
+        };
+
         const generateExportPagesHTML = () => {
             const students = window.state.sheetData;
             const confirmations = window.state.confirmations;
@@ -1232,7 +1256,7 @@
                         ${fieldIds.map(fid => `
                             <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
                                 <p id="lbl-${fid.replace('.', '-')}" class="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase mb-1 tracking-widest">${labels[fid] || ''}</p>
-                                <p id="val-${fid.replace('.', '-')}" class="text-[13px] font-semibold text-slate-800 break-words">${window.formatValue(data[fid])}</p>
+                                <div id="val-${fid.replace('.', '-')}" class="text-[13px] font-semibold text-slate-800 break-words">${window.formatValue(data[fid])}</div>
                             </div>
                         `).join('')}
                     </div>
@@ -1499,6 +1523,55 @@
             `;
         }
 
+        function renderLinkPreviewModal() {
+            if (!window.state.showLinkPreviewModal) return "";
+            
+            let url = window.state.currentPreviewUrl;
+            let contentHtml = '';
+
+            // Handle Google Drive links for better iframe embedding
+            if (url.includes('drive.google.com/file/d/')) {
+                url = url.replace('/view', '/preview');
+            }
+
+            // Simple check to see if it's an image OR a Google Drive direct link (uc?id=...)
+            const isImageExtension = url.match(/\.(jpeg|jpg|gif|png|webp|svg)(\?.*)?$/i);
+            const isGoogleDriveDirectLink = url.includes('drive.google.com/uc?');
+
+            if (isImageExtension || isGoogleDriveDirectLink) {
+                contentHtml = `<div class="w-full h-full flex items-center justify-center bg-slate-100 p-4">
+                                <img src="${url}" class="max-w-full max-h-full object-contain rounded-lg shadow-sm" alt="Preview" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'text-center text-slate-500\\'><i data-lucide=\\'image-off\\' size=\\'48\\' class=\\'mx-auto mb-2 opacity-50\\'></i><p>ไม่สามารถโหลดรูปภาพได้</p><p class=\\'text-xs mt-1 text-slate-400\\'>โปรดตรวจสอบว่าไฟล์ถูกแชร์เป็น <strong class=\\'text-red-400\\'>สาธารณะ (Anyone with the link)</strong></p></div>'; lucide.createIcons();">
+                               </div>`;
+            } else {
+                contentHtml = `<iframe src="${url}" class="w-full h-full border-0 bg-slate-50" allow="autoplay" allowfullscreen></iframe>`;
+            }
+
+            return `
+                <div class="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-4 bg-slate-900/80 backdrop-blur-sm page-transition">
+                    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[85vh] sm:h-[90vh] flex flex-col overflow-hidden">
+                        
+                        <!-- Header -->
+                        <div class="flex justify-between items-center p-3 border-b border-slate-100 bg-slate-50 shrink-0">
+                            <!-- Left: Go to link -->
+                            <button onclick="window.open('${window.state.currentPreviewUrl}', '_blank')" class="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-colors">
+                                <i data-lucide="external-link" size="14"></i> เปิดลิงก์ต้นฉบับ
+                            </button>
+                            
+                            <!-- Right: Close -->
+                            <button onclick="window.closeLinkPreview()" class="flex items-center justify-center w-8 h-8 bg-red-100 text-red-600 hover:bg-red-200 rounded-full transition-colors" title="ปิดหน้าต่าง">
+                                <i data-lucide="x" size="18"></i>
+                            </button>
+                        </div>
+                        
+                        <!-- Body (Preview Content) -->
+                        <div class="flex-1 overflow-hidden relative">
+                            ${contentHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function renderUIModal() {
             if (!window.state.modal.show) return "";
             return `
@@ -1618,6 +1691,7 @@
             window.updatePreviewModalUI();
             window.updateEditGuideUI();
             window.updateLogsModalUI();
+            window.updateLinkPreviewModalUI(); // เรนเดอร์ Modal ของ Link Preview
             lucide.createIcons();
         }
 
