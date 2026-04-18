@@ -225,13 +225,46 @@
 
         setInterval(() => window.checkSessionStatus(), 10000);
 
+        // ปรับปรุงฟังก์ชันแสดงผลลิงก์ให้แสดงเป็นชื่อไฟล์
         window.formatValue = (text) => {
             if (!text || text.trim() === '') return '<span class="text-slate-300 italic">ไม่มีข้อมูล</span>';
+            
+            // ป้องกัน XSS เบื้องต้น
             let safeText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            
+            // Regex สำหรับตรวจจับ URL
             const urlRegex = /(https?:\/\/[^\s]+)/g;
+            
             safeText = safeText.replace(urlRegex, function(url) {
-                return `<a href="${url}" target="_blank" class="text-indigo-500 underline hover:text-indigo-700 break-all font-medium inline-flex items-center gap-1"><i data-lucide="external-link" class="w-3 h-3"></i> ${url}</a>`;
+                try {
+                    // ลบ trailing slash ถ้ามี
+                    let cleanUrl = url.replace(/\/$/, "");
+                    // ดึงเอาส่วนสุดท้ายของ URL มาทำเป็นชื่อไฟล์
+                    let parts = cleanUrl.split('/');
+                    let fileName = parts[parts.length - 1].split('#')[0].split('?')[0];
+                    
+                    // กรณีเป็น Google Drive หรือลิงก์อื่นๆ ที่ไม่มีชื่อไฟล์ชัดเจน
+                    if (url.includes("drive.google.com")) {
+                        fileName = "เปิดไฟล์จาก Google Drive";
+                    } else if (!fileName || fileName.length < 3 || !fileName.includes(".")) {
+                        fileName = "คลิกเพื่อดูเอกสาร";
+                    }
+
+                    // จำกัดความยาวชื่อไฟล์ไม่ให้ล้นหน้าจอ
+                    if (fileName.length > 35) {
+                        fileName = fileName.substring(0, 32) + "...";
+                    }
+
+                    return `<a href="${url}" target="_blank" class="text-indigo-500 underline hover:text-indigo-700 break-all font-bold inline-flex items-center gap-1.5 bg-indigo-50/50 px-2 py-0.5 rounded border border-indigo-100/50 transition-colors">
+                        <i data-lucide="file-link" class="w-3.5 h-3.5"></i> 
+                        <span class="text-[12px]">${fileName}</span>
+                    </a>`;
+                } catch (e) {
+                    // ถ้าพังให้โชว์ URL เต็มตามปกติ
+                    return `<a href="${url}" target="_blank" class="text-indigo-500 underline font-medium">${url}</a>`;
+                }
             });
+            
             safeText = safeText.replace(/\n/g, '<br>');
             return safeText;
         };
