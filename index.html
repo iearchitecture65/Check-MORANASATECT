@@ -9,7 +9,9 @@
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Prompt:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Prompt:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" crossorigin="anonymous">
     
     <!-- Export Libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -218,7 +220,8 @@
             refCode: '',
             otpLoading: false,
             isSessionCheckDone: false, // เพิ่มสถานะการตรวจสอบเซสชัน
-            exportFormat: 'standard' // เพิ่ม state สำหรับจัดการรูปแบบพรีวิวส่งออก
+            exportFormat: 'standard', // เพิ่ม state สำหรับจัดการรูปแบบพรีวิวส่งออก
+            exportOrientation: 'portrait' // state ใหม่สำหรับจัดการหน้ากระดาษ แนวตั้ง/แนวนอน
         };
 
         window.cachedExportDataURLs = []; 
@@ -590,10 +593,10 @@
                     `).join('') + (topLogs.length === 0 ? '<p class="text-center py-4 text-slate-300 text-xs italic">ยังไม่มีประวัติการเข้าใช้งาน</p>' : '');
                 }
 
-                // อัปเดตตารางรายชื่อ
-                const elTable = document.getElementById('admin-table-body');
-                if (elTable) {
-                    elTable.innerHTML = studentStatusList.map(s => `
+                // อัปเดตตารางรายชื่อ (แยกการอัปเดตสำหรับ Desktop และ Mobile View)
+                const elTableDesktop = document.getElementById('admin-table-body-desktop');
+                if (elTableDesktop) {
+                    elTableDesktop.innerHTML = studentStatusList.map(s => `
                         <tr class="hover:bg-slate-50/50 transition-colors">
                             <td class="py-3 pl-2">
                                 <p class="font-black text-slate-800 text-[13px]">${s['1.1']}</p>
@@ -620,7 +623,53 @@
                             </td>
                         </tr>
                     `).join('');
-                    lucide.createIcons({root: elTable});
+                }
+
+                const elTableMobile = document.getElementById('admin-table-body-mobile');
+                if (elTableMobile) {
+                    elTableMobile.innerHTML = studentStatusList.map(s => {
+                        const getIcon = (conf) => conf ? '<i data-lucide="check-circle-2" size="16" class="text-green-500"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200"></i>';
+                        return `
+                            <div class="bg-white border border-slate-100 rounded-xl p-4 shadow-sm mb-3">
+                                <div class="flex justify-between items-start mb-3">
+                                    <div>
+                                        <p class="font-black text-slate-800 text-[13px] leading-tight">${s['1.1']}</p>
+                                        <p class="text-[10px] text-slate-500 font-medium mt-1">${s['1.2']}</p>
+                                        <p class="text-[9px] text-indigo-400 font-bold mt-0.5">${s['email'] || '-'}</p>
+                                    </div>
+                                    <div>
+                                        ${s.isAllConfirmed 
+                                            ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-700 text-[9px] font-bold rounded-full uppercase border border-green-200">สมบูรณ์</span>' 
+                                            : '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 text-orange-600 text-[9px] font-bold rounded-full uppercase border border-orange-200">รอดำเนินการ</span>'
+                                        }
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-4 gap-2 pt-3 border-t border-slate-50">
+                                    <div class="flex flex-col items-center gap-1">
+                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 1</span>
+                                        ${getIcon(s.conf.s1)}
+                                    </div>
+                                    <div class="flex flex-col items-center gap-1">
+                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 2</span>
+                                        ${getIcon(s.conf.s2)}
+                                    </div>
+                                    <div class="flex flex-col items-center gap-1">
+                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 3</span>
+                                        ${getIcon(s.conf.s3)}
+                                    </div>
+                                    <div class="flex flex-col items-center gap-1">
+                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 4</span>
+                                        ${getIcon(s.conf.s4)}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+                
+                const exportTableContainer = document.getElementById('export-table-container');
+                if (exportTableContainer) {
+                    lucide.createIcons({root: exportTableContainer});
                 }
             }
         };
@@ -1156,6 +1205,11 @@
             const totalPages = Math.ceil(students.length / rowsPerPage) || 1;
             const timestamp = new Date().toLocaleString('th-TH');
             const format = window.state.exportFormat || 'standard';
+            const isLandscape = window.state.exportOrientation === 'landscape';
+            
+            // สลับขนาดกระดาษสำหรับ A4 @ 96DPI
+            const pageWidth = isLandscape ? 1123 : 794;
+            const pageHeight = isLandscape ? 794 : 1123;
 
             for (let i = 0; i < totalPages; i++) {
                 const chunk = students.slice(i * rowsPerPage, (i + 1) * rowsPerPage);
@@ -1225,9 +1279,8 @@
                 }
 
                 const pageHtml = `
-                    <div id="capture-layout-wrapper-${i}" style="width: 794px; height: 1123px; background-color: #ffffff; padding: 40px 50px; font-family: 'Prompt', sans-serif; display: flex; flex-direction: column; box-sizing: border-box;">
+                    <div id="capture-layout-wrapper-${i}" style="width: ${pageWidth}px; height: ${pageHeight}px; background-color: #ffffff; padding: 40px 50px; font-family: 'Prompt', sans-serif; display: flex; flex-direction: column; box-sizing: border-box;">
                         <style>
-                            @import url('https://fonts.googleapis.com/css2?family=Prompt:wght@400;600;800&display=swap');
                             * { font-family: 'Prompt', sans-serif !important; }
                         </style>
                         
@@ -1269,7 +1322,8 @@
             const students = window.state.sheetData;
             if(!students || students.length === 0) return window.uiAlert("ไม่มีข้อมูลให้ส่งออก", "error");
 
-            window.state.exportFormat = 'standard'; // เซ็ตกลับเป็นค่าเริ่มต้นทุกครั้งที่เปิด
+            window.state.exportFormat = 'standard'; 
+            window.state.exportOrientation = 'portrait'; // เซ็ตกลับเป็นค่าเริ่มต้นทุกครั้งที่เปิด
             window.state.showPreviewModal = true;
             window.updatePreviewModalUI();
             
@@ -1278,6 +1332,12 @@
 
         window.changeExportFormat = async (format) => {
             window.state.exportFormat = format;
+            window.updatePreviewModalUI(); // อัปเดต UI เพื่อเปลี่ยนปุ่มที่ active
+            await window.refreshExportPreview(); // ดึงข้อมูลและเรนเดอร์ใหม่
+        };
+
+        window.changeExportOrientation = async (orientation) => {
+            window.state.exportOrientation = orientation;
             window.updatePreviewModalUI(); // อัปเดต UI เพื่อเปลี่ยนปุ่มที่ active
             await window.refreshExportPreview(); // ดึงข้อมูลและเรนเดอร์ใหม่
         };
@@ -1365,16 +1425,20 @@
                 });
             } else {
                 const { jsPDF } = window.jspdf;
+                const isLandscape = window.state.exportOrientation === 'landscape';
+                const formatSize = isLandscape ? [1123, 794] : [794, 1123];
+                const orientation = isLandscape ? 'l' : 'p';
+
                 const pdf = new jsPDF({
-                    orientation: 'p',
+                    orientation: orientation,
                     unit: 'px',
-                    format: [794, 1123],
+                    format: formatSize,
                     compress: true 
                 });
                 
                 window.cachedExportDataURLs.forEach((url, idx) => {
-                    if (idx > 0) pdf.addPage([794, 1123], 'p');
-                    pdf.addImage(url, 'PNG', 0, 0, 794, 1123, undefined, 'FAST');
+                    if (idx > 0) pdf.addPage(formatSize, orientation);
+                    pdf.addImage(url, 'PNG', 0, 0, formatSize[0], formatSize[1], undefined, 'FAST');
                 });
                 pdf.save(`${baseName}.pdf`);
             }
@@ -1825,48 +1889,93 @@
                                 </div>
                             </div>
                             
-                            <div id="export-table-container" class="overflow-x-auto custom-scrollbar p-1 -mx-1">
-                                <table class="w-full min-w-[600px] text-left border-collapse">
-                                    <thead class="border-b-2 border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                                        <tr>
-                                            <th class="pb-3 pl-2">รหัส / ชื่อ / อีเมล</th>
-                                            <th class="pb-3 text-center">ส่วนที่ 1</th>
-                                            <th class="pb-3 text-center">ส่วนที่ 2</th>
-                                            <th class="pb-3 text-center">ส่วนที่ 3</th>
-                                            <th class="pb-3 text-center">ส่วนที่ 4</th>
-                                            <th class="pb-3 text-right pr-2">สถานะรวม</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="admin-table-body" class="divide-y divide-slate-50">
-                                        ${studentStatusList.map(s => `
-                                            <tr class="hover:bg-slate-50/50 transition-colors">
-                                                <td class="py-3 pl-2">
-                                                    <p class="font-black text-slate-800 text-[13px]">${s['1.1']}</p>
-                                                    <p class="text-[10px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
-                                                    <p class="text-[9px] text-indigo-400 font-bold">${s['email'] || '-'}</p>
-                                                </td>
-                                                <td class="py-3 text-center">
-                                                    ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
-                                                </td>
-                                                <td class="py-3 text-center">
-                                                    ${s.conf.s2 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
-                                                </td>
-                                                <td class="py-3 text-center">
-                                                    ${s.conf.s3 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
-                                                </td>
-                                                <td class="py-3 text-center">
-                                                    ${s.conf.s4 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
-                                                </td>
-                                                <td class="py-3 text-right pr-2">
-                                                    ${s.isAllConfirmed 
-                                                        ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-700 text-[9px] font-bold rounded-full uppercase border border-green-200">สมบูรณ์</span>' 
-                                                        : '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 text-orange-600 text-[9px] font-bold rounded-full uppercase border border-orange-200">รอดำเนินการ</span>'
-                                                    }
-                                                </td>
+                            <div id="export-table-container">
+                                <!-- ตารางรายชื่อสำหรับหน้าจอ Desktop -->
+                                <div class="hidden md:block overflow-x-auto custom-scrollbar p-1 -mx-1">
+                                    <table class="w-full min-w-[600px] text-left border-collapse">
+                                        <thead class="border-b-2 border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                                            <tr>
+                                                <th class="pb-3 pl-2">รหัส / ชื่อ / อีเมล</th>
+                                                <th class="pb-3 text-center">ส่วนที่ 1</th>
+                                                <th class="pb-3 text-center">ส่วนที่ 2</th>
+                                                <th class="pb-3 text-center">ส่วนที่ 3</th>
+                                                <th class="pb-3 text-center">ส่วนที่ 4</th>
+                                                <th class="pb-3 text-right pr-2">สถานะรวม</th>
                                             </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
+                                        </thead>
+                                        <tbody id="admin-table-body-desktop" class="divide-y divide-slate-50">
+                                            ${studentStatusList.map(s => `
+                                                <tr class="hover:bg-slate-50/50 transition-colors">
+                                                    <td class="py-3 pl-2">
+                                                        <p class="font-black text-slate-800 text-[13px]">${s['1.1']}</p>
+                                                        <p class="text-[10px] text-slate-500 font-medium mt-0.5">${s['1.2']}</p>
+                                                        <p class="text-[9px] text-indigo-400 font-bold">${s['email'] || '-'}</p>
+                                                    </td>
+                                                    <td class="py-3 text-center">
+                                                        ${s.conf.s1 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
+                                                    </td>
+                                                    <td class="py-3 text-center">
+                                                        ${s.conf.s2 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
+                                                    </td>
+                                                    <td class="py-3 text-center">
+                                                        ${s.conf.s3 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
+                                                    </td>
+                                                    <td class="py-3 text-center">
+                                                        ${s.conf.s4 ? '<i data-lucide="check-circle-2" size="16" class="text-green-500 mx-auto"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200 mx-auto"></i>'}
+                                                    </td>
+                                                    <td class="py-3 text-right pr-2">
+                                                        ${s.isAllConfirmed 
+                                                            ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-700 text-[9px] font-bold rounded-full uppercase border border-green-200">สมบูรณ์</span>' 
+                                                            : '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 text-orange-600 text-[9px] font-bold rounded-full uppercase border border-orange-200">รอดำเนินการ</span>'
+                                                        }
+                                                    </td>
+                                                </tr>
+                                            `).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                
+                                <!-- รูปแบบการ์ดรายชื่อสำหรับหน้าจอ Mobile -->
+                                <div id="admin-table-body-mobile" class="md:hidden mt-2">
+                                    ${studentStatusList.map(s => {
+                                        const getIcon = (conf) => conf ? '<i data-lucide="check-circle-2" size="16" class="text-green-500"></i>' : '<i data-lucide="circle" size="16" class="text-slate-200"></i>';
+                                        return `
+                                            <div class="bg-white border border-slate-100 rounded-xl p-4 shadow-sm mb-3">
+                                                <div class="flex justify-between items-start mb-3">
+                                                    <div>
+                                                        <p class="font-black text-slate-800 text-[13px] leading-tight">${s['1.1']}</p>
+                                                        <p class="text-[10px] text-slate-500 font-medium mt-1">${s['1.2']}</p>
+                                                        <p class="text-[9px] text-indigo-400 font-bold mt-0.5">${s['email'] || '-'}</p>
+                                                    </div>
+                                                    <div>
+                                                        ${s.isAllConfirmed 
+                                                            ? '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 text-green-700 text-[9px] font-bold rounded-full uppercase border border-green-200">สมบูรณ์</span>' 
+                                                            : '<span class="inline-flex items-center gap-1 px-2.5 py-1 bg-orange-50 text-orange-600 text-[9px] font-bold rounded-full uppercase border border-orange-200">รอดำเนินการ</span>'
+                                                        }
+                                                    </div>
+                                                </div>
+                                                <div class="grid grid-cols-4 gap-2 pt-3 border-t border-slate-50">
+                                                    <div class="flex flex-col items-center gap-1">
+                                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 1</span>
+                                                        ${getIcon(s.conf.s1)}
+                                                    </div>
+                                                    <div class="flex flex-col items-center gap-1">
+                                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 2</span>
+                                                        ${getIcon(s.conf.s2)}
+                                                    </div>
+                                                    <div class="flex flex-col items-center gap-1">
+                                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 3</span>
+                                                        ${getIcon(s.conf.s3)}
+                                                    </div>
+                                                    <div class="flex flex-col items-center gap-1">
+                                                        <span class="text-[9px] font-bold text-slate-400">ส่วนที่ 4</span>
+                                                        ${getIcon(s.conf.s4)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
                             </div>
                         </div>
                     </main>
@@ -2123,22 +2232,29 @@
         function renderPreviewModal() {
             if (!window.state.showPreviewModal) return "";
             const format = window.state.exportFormat || 'standard';
+            const orientation = window.state.exportOrientation || 'portrait';
 
             return `
                 <div class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm page-transition">
                     <div class="bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden">
                         
-                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-4 sm:px-5 border-b border-slate-100 shrink-0 gap-3">
+                        <div class="flex flex-col md:flex-row justify-between items-start md:items-center p-4 sm:px-5 border-b border-slate-100 shrink-0 gap-3">
                             <h3 class="text-[15px] font-black text-slate-800 flex items-center gap-2">
                                 <i data-lucide="eye" class="text-indigo-500" size="18"></i> พรีวิวข้อมูลก่อนส่งออก
                             </h3>
                             
-                            <div class="flex bg-slate-100 p-1 rounded-lg">
-                                <button onclick="window.changeExportFormat('standard')" class="px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${format === 'standard' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}">รูปแบบมาตรฐาน</button>
-                                <button onclick="window.changeExportFormat('timestamp')" class="px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${format === 'timestamp' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}">รูปแบบเวลาส่งงาน</button>
+                            <div class="flex flex-wrap gap-2 w-full md:w-auto mt-1 md:mt-0">
+                                <div class="flex bg-slate-100 p-1 rounded-lg">
+                                    <button onclick="window.changeExportFormat('standard')" class="px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${format === 'standard' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}">รูปแบบมาตรฐาน</button>
+                                    <button onclick="window.changeExportFormat('timestamp')" class="px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${format === 'timestamp' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}">รูปแบบเวลาส่งงาน</button>
+                                </div>
+                                <div class="flex bg-slate-100 p-1 rounded-lg">
+                                    <button onclick="window.changeExportOrientation('portrait')" class="px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${orientation === 'portrait' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}">แนวตั้ง</button>
+                                    <button onclick="window.changeExportOrientation('landscape')" class="px-3 py-1.5 text-[11px] font-bold rounded-md transition-all ${orientation === 'landscape' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700'}">แนวนอน</button>
+                                </div>
                             </div>
 
-                            <button onclick="window.closeExportPreview()" class="absolute top-4 right-4 sm:static p-1.5 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><i data-lucide="x" size="18"></i></button>
+                            <button onclick="window.closeExportPreview()" class="absolute top-4 right-4 md:static p-1.5 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"><i data-lucide="x" size="18"></i></button>
                         </div>
                         
                         <div class="flex-1 overflow-auto bg-[#e2e8f0] p-4 flex flex-col items-center relative min-h-[400px]">
