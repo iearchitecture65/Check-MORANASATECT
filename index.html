@@ -222,6 +222,7 @@
         };
 
         window.cachedExportDataURLs = []; 
+        window.currentExportGenId = 0; // ID สำหรับติดตามและป้องกันการประมวลผล Export ซ้อนทับกัน
 
         // ฟังก์ชันช่วยขยายขนาด textarea อัตโนมัติ
         window.autoResizeTextarea = (el) => {
@@ -1187,15 +1188,17 @@
                             </tr>
                         `;
                     } else {
-                        // รูปแบบแสดงเวลาส่งงาน (Timestamp format)
+                        // รูปแบบแสดงเวลาส่งงาน (Timestamp format) แบ่ง 3 ช่อง ชิดซ้าย
                         const submitTime = s['10.1'] || '<span style="color:#94a3b8; font-style:italic;">ไม่มีข้อมูล</span>';
                         return `
                             <tr style="border-bottom: 1px solid #f1f5f9;">
-                                <td style="padding: 12px 10px; font-size: 13px; color: #1e293b; width: 45%;">
-                                    <div style="font-weight: 800;">${s['1.1']}</div>
-                                    <div style="font-size: 10px; color: #64748b;">${s['1.2']}</div>
+                                <td style="padding: 12px 10px; font-size: 13px; color: #1e293b; text-align: left; width: 25%;">
+                                    <span style="font-weight: 800;">${s['1.1']}</span>
                                 </td>
-                                <td style="padding: 12px 10px; text-align: right; font-size: 12px; color: #334155; font-weight: 600;">
+                                <td style="padding: 12px 10px; font-size: 13px; color: #1e293b; text-align: left; width: 45%;">
+                                    ${s['1.2']}
+                                </td>
+                                <td style="padding: 12px 10px; font-size: 12px; color: #4f46e5; font-weight: 600; text-align: left; width: 30%;">
                                     ${submitTime}
                                 </td>
                             </tr>
@@ -1215,8 +1218,9 @@
                     `;
                 } else {
                     tableHeader = `
-                        <th style="padding: 14px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">รหัส / ชื่อ-นามสกุล</th>
-                        <th style="padding: 14px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: right; letter-spacing: 0.5px;">วัน-เวลาที่ส่งข้อมูล (10.1)</th>
+                        <th style="padding: 14px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; text-align: left; width: 25%;">รหัสนักศึกษา</th>
+                        <th style="padding: 14px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; text-align: left; width: 45%;">ชื่อ-นามสกุล</th>
+                        <th style="padding: 14px 10px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; text-align: left; width: 30%;">วัน-เวลา ที่ส่งข้อมูล</th>
                     `;
                 }
 
@@ -1246,7 +1250,7 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    ${rowsHtml || `<tr><td colspan="${format === 'standard' ? 6 : 2}" style="text-align:center; padding:20px; color:#94a3b8;">ไม่มีข้อมูลนักศึกษา</td></tr>`}
+                                    ${rowsHtml || `<tr><td colspan="${format === 'standard' ? 6 : 3}" style="text-align:center; padding:20px; color:#94a3b8;">ไม่มีข้อมูลนักศึกษา</td></tr>`}
                                 </tbody>
                             </table>
                         </div>
@@ -1279,6 +1283,8 @@
         };
 
         window.refreshExportPreview = async () => {
+            const myGenId = ++window.currentExportGenId; // รับ ID ของการประมวลผลรอบนี้
+
             const previewContainer = document.getElementById('preview-images-container');
             const loadingText = document.getElementById('preview-loading-text');
             if(previewContainer) previewContainer.innerHTML = ''; 
@@ -1292,11 +1298,14 @@
                 const renderer = document.getElementById('offscreenRenderer');
                 
                 for (let i = 0; i < pagesHtml.length; i++) {
+                    if (window.currentExportGenId !== myGenId) return; // หากมีการกดเปลี่ยน Format ให้หยุดลูปการทำงานทันที
+                    
                     renderer.innerHTML = pagesHtml[i];
                     const wrap = renderer.querySelector(`[id^="capture-layout-wrapper"]`);
                     void wrap.offsetWidth; 
                     
                     await new Promise(r => setTimeout(r, 500)); 
+                    if (window.currentExportGenId !== myGenId) return; // เช็คอีกรอบหลังรอ Delay
                     
                     const dataUrl = await htmlToImage.toPng(wrap, {
                         quality: 0.85, 
@@ -1312,22 +1321,32 @@
                         }
                     });
                     
+                    if (window.currentExportGenId !== myGenId) return; // เช็คอีกรอบหลังประมวลผลภาพเสร็จ
+                    
                     window.cachedExportDataURLs.push(dataUrl);
                     
                     const img = document.createElement('img');
                     img.src = dataUrl;
                     img.className = "max-w-full h-auto rounded-xl shadow-lg border border-slate-200 fade-in";
-                    if(previewContainer) previewContainer.appendChild(img);
+                    
+                    // ดึง Container ใหม่เสมอ ป้องกันกรณีถูก React/DOM เขียนทับ
+                    const currentContainer = document.getElementById('preview-images-container');
+                    if(currentContainer) currentContainer.appendChild(img);
                 }
             } catch (e) { 
-                console.error(e);
-                window.uiAlert("การพรีวิวล้มเหลว: " + e.message, "error"); 
+                if (window.currentExportGenId === myGenId) {
+                    console.error(e);
+                    window.uiAlert("การพรีวิวล้มเหลว: " + e.message, "error"); 
+                }
             } finally { 
-                if(loadingText) loadingText.classList.add('hidden');
+                if (window.currentExportGenId === myGenId && loadingText) {
+                    loadingText.classList.add('hidden');
+                }
             }
         };
 
         window.closeExportPreview = () => {
+            window.currentExportGenId++; // ยกเลิกการประมวลผลที่ค้างอยู่ (ถ้ามี)
             window.state.showPreviewModal = false;
             window.updatePreviewModalUI();
         };
